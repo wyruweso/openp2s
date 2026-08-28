@@ -1,0 +1,152 @@
+.TH OPENP2S 1 "2026" "openp2s" "User Commands"
+.SH NAME
+openp2s \- Azure Point-to-Site VPN client with Microsoft Entra ID authentication
+.SH SYNOPSIS
+.B openp2s
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B openp2s
+connects to an Azure Point-to-Site VPN gateway that uses Microsoft Entra ID
+authentication, from Linux, using upstream OpenVPN with a minimal
+credential-capacity patch.
+.PP
+Stock OpenVPN cannot carry an Entra access token through the authentication
+exchange, because two independent limits are too small for it: the retained
+credential buffer
+.RB ( USER_PASS_LEN ,
+128 bytes) truncates the password the token is sent as, and the key-method-2
+control-channel buffer
+.RB ( TLS_CHANNEL_BUF_SIZE ,
+2048 bytes) cannot carry the message containing it. Raising either alone is
+not sufficient. The OpenVPN shipped alongside this program enlarges both and
+changes nothing else; it is installed at
+.IR /usr/lib/openp2s/openvpn .
+.PP
+That binary also carries an opt-in Azure compatibility option, compiled in but
+inert. OpenP2S does not use it: measurement against a live gateway showed no
+Azure-specific protocol behaviour is required. It is there so that a gateway
+which does require the Azure options string can be reached with
+.B \-\-experimental\-azure\-compat
+rather than a rebuilt OpenVPN. Only the local configuration can enable it \(em
+a server cannot push it, and no environment variable affects it.
+.PP
+No TLS ClientHello shaping or key-logging code is compiled in at all.
+.SH COMMANDS
+.TP
+.BI connect " profile.xml"
+Authenticate, bring up the tunnel and apply the profile's split DNS. Runs in
+the foreground; Ctrl+C disconnects cleanly.
+.TP
+.BI convert " profile.xml"
+Write a standalone OpenVPN configuration. The output embeds the profile
+serversecret as an inline tls-auth key and is written with mode 0600.
+.TP
+.BI inspect " profile.xml"
+Show what OpenP2S reads from a profile. Never prints the serversecret.
+.TP
+.BI probe " profile.xml"
+Run the authentication and protocol exchange against the gateway and report
+how far it got, without creating a tunnel or altering routes or DNS. The
+generated configuration uses
+.BR "dev null" ,
+.B route\-noexec
+and
+.BR ifconfig\-noexec ,
+so the run cannot change host network state whatever privileges it has. It
+does write a configuration and a socket into a private, throwaway directory,
+and may update the cached Entra session.
+.TP
+.BI doctor " [profile.xml]"
+Check the environment, the profile and any live connection.
+.TP
+.B status
+Show the current connection.
+.TP
+.B disconnect
+Disconnect and clean up.
+.TP
+.BI "auth login" " profile.xml"
+Sign in and cache the Entra session without connecting.
+.TP
+.B auth status
+Show cached Entra sessions.
+.TP
+.BR "auth clear " [ \-\-all ]
+Forget a cached Entra session.
+.SH FILES
+.TP
+.I /run/user/$UID/openp2s/
+Runtime state on tmpfs. The directory is mode 0700 and holds the generated
+OpenVPN configuration and the management socket. When the compatibility
+fallback described under
+.B SECURITY
+is used, the temporary credentials file lives here too, mode 0600.
+.TP
+.I ~/.local/state/openp2s/cache/
+Persistent Entra token cache. The directory is mode 0700; the files in it are
+mode 0600.
+.TP
+.I /usr/lib/openp2s/openvpn
+The patched OpenVPN binary.
+.SH PRIVILEGES
+.B openp2s
+runs as you, and asks for elevation only where root is genuinely required: the
+.BR openvpn (8)
+process lifecycle, and per-link DNS configuration. Those are invoked through
+.BR sudo (8)
+by absolute path.
+.PP
+Running it as
+.B sudo openp2s
+is refused. Serving your runtime directory and token cache while running as
+root means creating and inspecting paths you control, and a path you control
+can be replaced with a link to one you do not own \(em which would turn a
+routine ownership fix into a way to acquire root-owned files. Nothing is lost
+by refusing: the operations that need root still get it.
+.SH SECURITY
+OpenP2S normally delivers the Entra access token to OpenVPN over a private
+Unix-domain socket, in memory. On that path the token is not written to any
+file.
+.PP
+If the OpenVPN in use does not support that mechanism, OpenP2S falls back to a
+temporary credentials file, created mode 0600 in the tmpfs runtime directory
+above. It exists for the lifetime of the connection, because OpenVPN may
+re-read it, and is removed during teardown, including when a connection
+fails.
+.PP
+On either path the token never appears in argv or in the environment, and
+never in the generated OpenVPN configuration.
+.PP
+Certificate verification is never disabled: there is no option to turn it off,
+the gateway certificate is always validated against the system trust store,
+and no CA is ever read from the profile.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+A general error, or a query whose answer is negative.
+.B openp2s status
+returns 1 when no tunnel is connected, and
+.B openp2s doctor
+returns 1 when it finds a problem.
+.TP
+.B 2
+The profile could not be parsed or failed validation.
+.TP
+.B 3
+Entra authentication failed.
+.TP
+.B 4
+The tunnel failed.
+.TP
+.B 5
+Host network state could not be configured, or could not be fully cleaned up.
+.B openp2s disconnect
+returns 5 when teardown left something behind, and keeps the session record so
+the attempt can be repeated.
+.SH SEE ALSO
+.BR openvpn (8),
+.BR resolvectl (1)

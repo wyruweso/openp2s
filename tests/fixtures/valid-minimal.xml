@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AzVpnProfile>
+  <fqdn>azuregateway-minimal-0001.vpn.azure.com</fqdn>
+  <tenant>https://login.microsoftonline.com/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee</tenant>
+  <audience>c632b3df-fb67-4d84-bdcf-b95ad541b5c8</audience>
+  <!-- SYNTHETIC TEST KEY: a repeating nibble sequence, not real key material. -->
+  <serversecret>0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</serversecret>
+</AzVpnProfile>

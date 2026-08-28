@@ -1,0 +1,57 @@
+# OpenP2S OpenVPN build manifest
+#
+#   OpenVPN <pinned release>
+#     + patches/<version>/long-credentials.patch           (always active)
+#     + patches/<version>/experimental-azure-compat.patch  (inert by default)
+#   = the OpenP2S OpenVPN binary
+#
+# There is one binary. Both patches are always applied; the second only adds
+# an option, and nothing it does happens unless a configuration asks for it.
+#
+# One directory per supported OpenVPN release. A new release is added only
+# after it passes the probe/test matrix against a real gateway; there are no
+# per-version git branches, and no patch is carried for a version that has
+# not been measured.
+#
+# scripts/build-openvpn.sh reads this; scripts/verify-provenance.sh checks a
+# built tree against it.
+
+DEFAULT_VERSION=2.7.6
+
+# ---------------------------------------------------------------- 2.7.6 ---
+# Verified against a live Azure Entra P2S gateway on 2026-08-27/28.
+
+2.7.6.tarball=openvpn-2.7.6.tar.gz
+2.7.6.url=https://swupdate.openvpn.net/community/releases/openvpn-2.7.6.tar.gz
+2.7.6.tarball_sha256=10e24a9385f23cc38cc5cf448f3ca0769f939bc4cbecc4f4647d7e006e52db74
+2.7.6.tag=v2.7.6
+2.7.6.tag_object=b29a3178273d1250a40388d264e439012ded7698
+2.7.6.commit=327a33de2aa21883f3d206774c1d0801b244fce6
+
+# Always applied. The entire production diff: two buffer sizes, nothing else.
+#   USER_PASS_LEN         128  -> 4096
+#   TLS_CHANNEL_BUF_SIZE  2048 -> 8192
+2.7.6.patch.long_credentials=patches/2.7.6/long-credentials.patch
+2.7.6.patch.long_credentials_sha256=755b9d2fb67d44a1d5cab6caa84bc2a32980ffec4e7a58cb3c5b783f95bed52c
+
+# Always applied, but inert. Adds the --experimental-azure-compat option: the
+# Azure OCC options string and peer-info. Measurement showed the gateway we
+# tested does not need it, so OpenP2S never passes the option by default; it
+# is compiled in so a gateway that does need it can be reached with
+#   openp2s connect <profile> --experimental-azure-compat
+# rather than a rebuilt OpenVPN.
+2.7.6.patch.experimental_azure_compat=patches/2.7.6/experimental-azure-compat.patch
+2.7.6.patch.experimental_azure_compat_sha256=8ecbbe3e2e720924b68324cf6ee0e759a19c115c4c67d27ef9d47222d2864c80
+
+
+# The two limits long-credentials.patch raises. Declared here so the build,
+# the policy checks and BUILDINFO all read the same numbers instead of
+# repeating them: build-openvpn.sh asserts the patched source really says
+# these, and openp2s reads user_pass_len to reject a token OpenVPN would
+# silently truncate.
+2.7.6.user_pass_len=4096
+2.7.6.tls_channel_buf_size=8192
+
+# The resulting binary hash is not pinned: OpenVPN's autotools build is not
+# bit-reproducible across toolchains. build-openvpn.sh records what it
+# actually produced in build/openvpn/BUILDINFO.

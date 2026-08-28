@@ -1,0 +1,18 @@
+node_modules/
+build/
+dist/
+*.tsbuildinfo
+
+# Never commit real Azure profiles or captured secrets.
+#
+# A real export arrives named azurevpnconfig.xml, so the accident to guard
+# against is dropping one somewhere convenient and committing it. The fixture
+# directory is re-included because the synthetic profiles live there - but the
+# re-include is then narrowed again, so a file carrying the export's own name
+# stays ignored even inside tests/fixtures. This is a guard rail, not a
+# boundary: .gitignore has never been one.
+*.azurevpnconfig.xml
+azurevpnconfig*.xml
+!tests/fixtures/*.xml
+tests/fixtures/*azurevpnconfig*.xml
+*.keylog

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AzVpnProfile xmlns="http://schemas.microsoft.com/azvpnclient/2020/09" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <name>contoso-p2s</name>
+  <version>1</version>
+  <fqdn>azuregateway-fake-0000.vpn.azure.com</fqdn>
+  <protocol>OpenVPN</protocol>
+  <tenant>https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/</tenant>
+  <audience>41b23e61-6c1e-4545-b367-cd054e0ed4b4</audience>
+  <issuer>https://sts.windows.net/11111111-2222-3333-4444-555555555555/</issuer>
+  <!-- SYNTHETIC TEST KEY: a repeating nibble sequence, not real key material. -->
+  <serversecret>0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</serversecret>
+  <clientconfig>
+    <dnsservers>
+      <dnsserver>10.10.0.4</dnsserver>
+      <dnsserver>10.10.0.5</dnsserver>
+    </dnsservers>
+    <dnssuffixes>
+      <dnssuffix>.wvd.microsoft.com</dnssuffix>
+      <dnssuffix>corp.contoso.example</dnssuffix>
+    </dnssuffixes>
+    <includeroutes>
+      <route>
+        <destination>10.20.0.0</destination>
+        <mask>16</mask>
+      </route>
+      <route>
+        <destination>10.30.0.0</destination>
+        <mask>255.255.255.0</mask>
+      </route>
+    </includeroutes>
+  </clientconfig>
+</AzVpnProfile>

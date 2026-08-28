@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<azvpn:AzVpnProfile xmlns:azvpn="http://schemas.microsoft.com/azvpnclient/2020/09">
+  <azvpn:fqdn>azuregateway-ns-0002.vpn.azure.com</azvpn:fqdn>
+  <azvpn:tenant>https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555</azvpn:tenant>
+  <azvpn:audience>41b23e61-6c1e-4545-b367-cd054e0ed4b4</azvpn:audience>
+  <!-- SYNTHETIC TEST KEY: a repeating nibble sequence, not real key material. -->
+  <azvpn:serversecret>0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</azvpn:serversecret>
+  <azvpn:clientconfig>
+    <azvpn:dnsservers>
+      <azvpn:dnsserver>172.16.0.10</azvpn:dnsserver>
+    </azvpn:dnsservers>
+    <azvpn:dnssuffixes>
+      <azvpn:dnssuffix>wvd.microsoft.com</azvpn:dnssuffix>
+    </azvpn:dnssuffixes>
+  </azvpn:clientconfig>
+</azvpn:AzVpnProfile>

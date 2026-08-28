@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The schema Azure actually exports today. All values are synthetic. -->
+<AzVpnProfile xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.datacontract.org/2004/07/">
+  <any i:nil="true" />
+  <clientauth>
+    <aad>
+      <audience>41b23e61-6c1e-4545-b367-cd054e0ed4b4</audience>
+      <cachesigninuser>true</cachesigninuser>
+      <enablegrouptoken>false</enablegrouptoken>
+      <issuer>https://sts.windows.net/11111111-2222-3333-4444-555555555555/</issuer>
+      <tenant>https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/</tenant>
+    </aad>
+    <cert i:nil="true" />
+    <type>aad</type>
+    <usernamepass i:nil="true" />
+  </clientauth>
+  <clientconfig>
+    <dnssuffixes>
+      <dnssuffix>.wvd.microsoft.com</dnssuffix>
+      <dnssuffix>corp.contoso.example</dnssuffix>
+    </dnssuffixes>
+    <dnsservers>
+      <dnsserver>10.10.0.4</dnsserver>
+      <dnsserver>10.10.0.5</dnsserver>
+    </dnsservers>
+  </clientconfig>
+  <name>Contoso P2S Profile</name>
+  <protocolconfig>
+    <sslprotocolConfig>
+      <transportprotocol>tcp</transportprotocol>
+    </sslprotocolConfig>
+  </protocolconfig>
+  <serverlist>
+    <ServerEntry>
+      <displayname i:nil="true" />
+      <fqdn>azuregateway-00000000-1111-2222-3333-444444444444-aaaaaaaaaaaa.vpn.azure.com</fqdn>
+    </ServerEntry>
+  </serverlist>
+  <servervalidation>
+    <Cert>
+      <hash>0123456789abcdef0123456789abcdef01234567</hash>
+      <issuer i:nil="true" />
+    </Cert>
+    <!-- SYNTHETIC TEST KEY: a repeating nibble sequence, not real key material. -->
+    <serversecret>0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</serversecret>
+    <type>cert</type>
+    <usepinnedroot>false</usepinnedroot>
+  </servervalidation>
+  <version>1</version>
+</AzVpnProfile>

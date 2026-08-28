@@ -1,0 +1,228 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or ref to build (dry run; nothing is published)'
+        required: false
+
+# Deliberately no permissions at the workflow level. Each job asks for the
+# least it needs, and only `publish` can write to the repository.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # For the signed build provenance attestation below. Not contents:write:
+      # nothing in this job may be able to publish.
+      id-token: write
+      attestations: write
+    steps:
+      # Everything below - npm ci, the build scripts, the compiler - runs in
+      # this checkout. It must not have a credential that can write to the
+      # repository, so the token is not persisted into .git/config and the
+      # publish step lives in a separate job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libcap-ng-dev \
+            ca-certificates dpkg-dev fakeroot lintian man-db
+
+      - run: npm ci
+
+      - name: Record what is being built
+        run: |
+          {
+            echo "ref:    ${{ github.event.inputs.ref || github.ref }}"
+            echo "commit: $(git rev-parse HEAD)"
+            echo "node:   $(node --version)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The same gates a pull request has to pass. Every one of them is a
+      # script or an npm script shared with ci.yml, so a release cannot be
+      # published under a weaker set of checks than a PR.
+      - name: Quality gates
+        run: npm run check
+
+      - name: Build the patched OpenVPN
+        run: scripts/build-openvpn.sh
+
+      - name: Verify provenance
+        run: scripts/verify-provenance.sh
+
+      - name: Patch policy
+        run: scripts/check-patch-policy.sh
+
+      - name: Binary policy
+        run: scripts/check-binary-policy.sh
+
+      - name: Build the CLI executable
+        run: scripts/build-cli.sh
+
+      - name: CLI reproducibility
+        run: scripts/check-cli-reproducible.sh
+
+      - name: Assemble the release bundle
+        run: scripts/build-release.sh --skip-build
+
+      - name: Build the .deb
+        run: scripts/build-deb.sh --skip-build
+
+      - name: Install the package
+        run: sudo apt-get install -y ./build/deb/openp2s_*.deb
+
+      # The build tree is removed first. The smoke test asserts that the
+      # installed CLI resolves the installed OpenVPN, and leaving build/
+      # in place would let a regression in that resolution hide behind a
+      # binary the package did not provide. build/release and build/deb are
+      # kept: the artifacts are collected from them below.
+      - name: Smoke test the installed package
+        run: |
+          rm -rf build/openvpn build/cli
+          scripts/smoke-package.sh
+
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json version $pkg" >&2
+            exit 1
+          fi
+
+      # One SHA256SUMS covering every published artifact, including the .deb,
+      # so a downloader can verify the whole set with one command.
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # The portable bundle is the primary download: extract and run.
+          cp build/release/openp2s-*-linux-*.tar.gz dist/
+          # GPL corresponding source for the OpenVPN binary inside it.
+          cp build/release/openvpn-*-openp2s-source.tar.gz dist/
+          # The loose binaries and their provenance, for anyone who wants them.
+          cp build/release/openp2s build/release/openvpn-openp2s dist/
+          cp build/release/BUILDINFO build/release/THIRD_PARTY_NOTICES dist/
+          cp build/release/NODE_LICENSE build/release/openvpn-COPYING dist/
+          cp LICENSE dist/
+          cp build/deb/*.deb dist/
+          ( cd dist && sha256sum -- * > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS )
+          ( cd dist && sha256sum --check SHA256SUMS )
+          ls -la dist
+
+      # Binds each artifact to this repository, workflow and commit.
+      # SHA256SUMS says the bytes are unchanged; this says where from.
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/openp2s
+            dist/openvpn-openp2s
+            dist/*.deb
+
+      - name: Summarise the build
+        run: |
+          {
+            echo '## Artifacts'
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+            echo
+            echo '## OpenVPN provenance'
+            echo
+            echo '```'
+            cat dist/BUILDINFO
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openp2s-release
+          path: dist/
+          retention-days: 90
+
+  publish:
+    name: publish the GitHub release
+    runs-on: ubuntu-24.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    # The only job with write access, and it compiles nothing: it downloads
+    # the artifact the build job already verified and creates the release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: openp2s-release
+          path: dist
+
+      # The manifest travels with the artifact, so re-checking it here proves
+      # the bytes being published are the bytes that were built and tested.
+      - name: Re-verify the manifest
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check SHA256SUMS
+          ls -la
+
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            sha256sum --check SHA256SUMS
+            sudo apt install ./openp2s_*.deb
+            ```
+
+            Or run it in place, with nothing installed — the CLI finds the
+            OpenVPN that shipped beside it:
+
+            ```bash
+            tar xf openp2s-*-linux-amd64.tar.gz
+            cd openp2s-*-linux-amd64
+            ./openp2s doctor <profile>.xml
+            ```
+
+            ## Verify
+
+            ```bash
+            gh attestation verify openp2s -R ${{ github.repository }}
+            ```
+
+            `openvpn-<version>-openp2s-source.tar.gz` is the complete
+            corresponding source for the GPL binary in this release.
+
+            `openvpn-openp2s` is upstream OpenVPN plus
+            `patches/<version>/long-credentials.patch`, which changes two
+            buffer sizes and nothing else - asserted line by line in CI by
+            `scripts/check-patch-policy.sh`. `BUILDINFO` records the upstream
+            version, commit and hashes; `scripts/verify-provenance.sh`
+            re-checks them against `patches/manifest`.

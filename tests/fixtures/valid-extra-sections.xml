@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AzVpnProfile xmlns="http://schemas.microsoft.com/azvpnclient/2020/09">
+  <fqdn>azuregateway-extra-0003.vpn.azure.com</fqdn>
+  <tenant>https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555</tenant>
+  <audience>41b23e61-6c1e-4545-b367-cd054e0ed4b4</audience>
+  <!-- SYNTHETIC TEST KEY: a repeating nibble sequence, not real key material. -->
+  <serversecret>0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</serversecret>
+  <futurefeature>
+    <enabled>true</enabled>
+    <nested><deeply>value</deeply></nested>
+  </futurefeature>
+  <clientconfig>
+    <dnsservers><dnsserver>10.0.0.53</dnsserver></dnsservers>
+    <someunknownblock><item>ignore me</item></someunknownblock>
+  </clientconfig>
+  <trailingunknown>whatever</trailingunknown>
+</AzVpnProfile>

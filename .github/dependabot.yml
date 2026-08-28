@@ -1,0 +1,58 @@
+# Dependabot keeps two things current: the packages that end up inside the
+# executable, and the GitHub Actions that build it.
+#
+# The actions matter more than they look. They are pinned to full commit SHAs
+# with a trailing `# vX.Y.Z` comment, because a tag can be repointed at new
+# code and these workflows build a binary. Dependabot understands that exact
+# form - it moves the SHA and rewrites the comment - so pinning stays current
+# instead of decaying into "pinned to whatever was released that week".
+#
+# What is deliberately absent: OpenVPN itself is pinned separately in
+# patches/manifest - the release tarball, its sha256, and the sha256 of every
+# patch applied to it. Dependabot has no ecosystem for this dependency.
+#
+# OpenVPN updates are intentionally manual: a new release means rebasing the
+# patches and re-running the probe matrix against a real gateway before moving
+# the pin. The manifest documents that process.
+version: 2
+
+updates:
+  # ------------------------------------------------------------------ npm ---
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # The linter, the formatter, the type checker and the type definitions
+      # travel together and are reviewed as one change: none of them puts a
+      # byte into a shipped artifact.
+      dev-tooling:
+        dependency-type: development
+        exclude-patterns:
+          - esbuild
+          - postject
+    # Everything else stays ungrouped, one pull request each, on purpose:
+    #
+    #   @azure/msal-node, commander, fast-xml-parser
+    #     bundled into the executable, so every bump is also a licence
+    #     question - scripts/generate-notices.ts and THIRD_PARTY_NOTICES.
+    #
+    #   esbuild, postject
+    #     pinned to exact versions because they decide the bytes of the
+    #     executable. A bump has to keep scripts/check-cli-reproducible.sh
+    #     passing, which is a review rather than a rubber stamp.
+
+  # -------------------------------------------------------- github actions ---
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # Nothing here ships. One pull request for the lot keeps the SHA pins
+      # from turning into weekly noise.
+      actions:
+        patterns:
+          - '*'

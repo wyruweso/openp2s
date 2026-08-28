@@ -1,0 +1,169 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only throughout. Pull request code runs here, so it must never be able
+# to reach a credential that can write to the repository. `pull_request` (not
+# `pull_request_target`) keeps it in the fork's context as well.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to full commit SHAs rather than moving tags: a tag can be
+# repointed at new code, and this workflow builds an executable and a modified
+# OpenVPN. The trailing comment records which release each SHA is.
+jobs:
+  check:
+    name: format, lint, typecheck, test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # No network, no root, no changes to system DNS.
+      - name: Tests
+        run: npm test
+
+  openvpn:
+    name: patched OpenVPN
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libcap-ng-dev ca-certificates
+
+      # Downloads the pinned tarball, verifies its sha256, verifies the patch
+      # sha256, applies it and builds. Fails closed on any mismatch.
+      - name: Build
+        run: scripts/build-openvpn.sh
+
+      - name: Verify provenance
+        run: scripts/verify-provenance.sh
+
+      # Asserts the project's central claim semantically: every line the
+      # production patch removes and every non-comment line it adds must be
+      # one of the two constants.
+      - name: Patch policy
+        run: scripts/check-patch-policy.sh
+
+      - name: Binary policy
+        run: scripts/check-binary-policy.sh
+
+  package:
+    name: executable and .deb
+    runs-on: ubuntu-24.04
+    needs: [check, openvpn]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libcap-ng-dev \
+            ca-certificates dpkg-dev fakeroot lintian man-db
+
+      - run: npm ci
+
+      - run: scripts/build-openvpn.sh
+
+      # This job builds its own OpenVPN on its own runner. `needs: openvpn`
+      # only proves that a *different* build passed, so the checks are run
+      # again here, against the binary that actually goes into the package.
+      - name: Verify provenance
+        run: scripts/verify-provenance.sh
+
+      - name: Binary policy
+        run: scripts/check-binary-policy.sh
+
+      - run: scripts/build-cli.sh
+
+      # Two builds, in independent build directories at different absolute
+      # paths, must produce the same bytes. The differing paths are the point:
+      # Node stores the SEA main script's path in the blob, so a same-path
+      # check would pass while the executable stayed unreproducible for
+      # anyone whose checkout is elsewhere.
+      - name: CLI reproducibility
+        run: scripts/check-cli-reproducible.sh
+
+      - run: scripts/build-release.sh --skip-build
+      - run: scripts/build-deb.sh --skip-build
+
+      # Install the package for real and drive the CLI through it: the only
+      # check that covers the installed layout, where there is no source
+      # checkout to find the OpenVPN binary or the man page in.
+      - name: Install the package
+        run: sudo apt-get install -y ./build/deb/openp2s_*.deb
+
+      # The build tree is removed first. The smoke test asserts that the
+      # installed CLI resolves the installed OpenVPN, and leaving build/
+      # in place would let a regression in that resolution hide behind a
+      # binary the package did not provide.
+      - name: Smoke test the installed package
+        run: |
+          rm -rf build/openvpn build/cli
+          scripts/smoke-package.sh
+
+      # One manifest covering everything published, built after the .deb so it
+      # cannot describe a subset. build-release.sh writes its own SHA256SUMS
+      # before the package exists; a downloader would reasonably assume it
+      # covered the .deb too.
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # The portable bundle is the primary download: extract and run.
+          cp build/release/openp2s-*-linux-*.tar.gz dist/
+          # GPL corresponding source for the OpenVPN binary inside it.
+          cp build/release/openvpn-*-openp2s-source.tar.gz dist/
+          # The loose binaries and their provenance, for anyone who wants them.
+          cp build/release/openp2s build/release/openvpn-openp2s dist/
+          cp build/release/BUILDINFO build/release/THIRD_PARTY_NOTICES dist/
+          cp build/release/NODE_LICENSE build/release/openvpn-COPYING dist/
+          cp LICENSE dist/
+          cp build/deb/*.deb dist/
+          ( cd dist && sha256sum -- * > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS )
+          ( cd dist && sha256sum --check SHA256SUMS )
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openp2s-${{ github.sha }}
+          path: dist/
+          retention-days: 14

@@ -1,0 +1,49 @@
+{
+  "name": "openp2s",
+  "version": "0.1.0",
+  "description": "Native Linux client for Azure Point-to-Site VPN with Microsoft Entra ID authentication",
+  "license": "GPL-2.0-only",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.13.0"
+  },
+  "bin": {
+    "openp2s": "./src/cli/run.ts"
+  },
+  "scripts": {
+    "test": "node --test 'tests/**/*.test.ts'",
+    "typecheck": "tsc --noEmit",
+    "build:openvpn": "scripts/build-openvpn.sh",
+    "verify:provenance": "scripts/verify-provenance.sh",
+    "build:cli": "scripts/build-cli.sh",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "build:deb": "scripts/build-deb.sh",
+    "build:release": "scripts/build-release.sh",
+    "check:patch": "scripts/check-patch-policy.sh",
+    "check:binary": "scripts/check-binary-policy.sh",
+    "smoke:package": "scripts/smoke-package.sh",
+    "build:source": "scripts/build-source-tarball.sh",
+    "build:notices": "node scripts/generate-notices.ts build/cli/esbuild-meta.json build/openvpn/BUILDINFO build/cli/CLI-BUILDINFO",
+    "check:cli-reproducible": "scripts/check-cli-reproducible.sh"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.6.0",
+    "commander": "^15.0.0",
+    "fast-xml-parser": "^5.11.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.0",
+    "esbuild": "0.28.2",
+    "eslint": "^10.9.1",
+    "postject": "1.0.0-alpha.6",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.68.0"
+  }
+}

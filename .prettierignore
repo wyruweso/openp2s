@@ -1,0 +1,5 @@
+build/
+node_modules/
+patches/
+tests/fixtures/expected-openvpn.conf
+package-lock.json
