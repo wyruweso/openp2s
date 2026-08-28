@@ -1,13 +1,15 @@
-name: release
+name: Release
+
+# Two ways in, and the difference is the whole contract:
+#
+#   push a v* tag        a real release: build, verify, publish
+#   run manually         a dry run of the same build against whatever ref you
+#                        launch it from. Publishes nothing.
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Tag or ref to build (dry run; nothing is published)'
-        required: false
 
 # Deliberately no permissions at the workflow level. Each job asks for the
 # least it needs, and only `publish` can write to the repository.
@@ -34,7 +36,6 @@ jobs:
       # publish step lives in a separate job.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -54,7 +55,7 @@ jobs:
       - name: Record what is being built
         run: |
           {
-            echo "ref:    ${{ github.event.inputs.ref || github.ref }}"
+            echo "ref:    ${{ github.ref }}"
             echo "commit: $(git rev-parse HEAD)"
             echo "node:   $(node --version)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -102,8 +103,9 @@ jobs:
           rm -rf build/openvpn build/cli
           scripts/smoke-package.sh
 
+      # Only meaningful for a real release; a dry run may be on any ref.
       - name: Check the tag matches package.json
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
@@ -136,7 +138,7 @@ jobs:
       # Binds each artifact to this repository, workflow and commit.
       # SHA256SUMS says the bytes are unchanged; this says where from.
       - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -170,7 +172,9 @@ jobs:
     name: publish the GitHub release
     runs-on: ubuntu-24.04
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # `github.event_name == 'push'` is not redundant: workflow_dispatch can be
+    # launched against a tag from the UI, and a manual run must never publish.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     # The only job with write access, and it compiles nothing: it downloads
     # the artifact the build job already verified and creates the release.
     permissions:
