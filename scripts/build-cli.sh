@@ -148,7 +148,7 @@ ACTUAL_VERSION="$("$TMP_OUT" --version 2>&1)" || die "the built executable does 
 If that looks like a Node version, the SEA blob was not injected and the
 output is a plain copy of node."
 
-"$TMP_OUT" --help 2>&1 | grep -q 'openp2s' \
+"$TMP_OUT" --help 2>&1 | grep 'openp2s' >/dev/null \
     || die "the built executable does not print OpenP2S help"
 
 # One real command end to end: the parser and wiring survived minification.
@@ -156,11 +156,20 @@ output is a plain copy of node."
     || die "the built executable cannot inspect a profile"
 
 # A release binary must not carry the build machine's directory layout.
+# Materialised once, then grepped as a plain file. No pipeline, so `grep -q`
+# is safe again - and a failure of `strings` itself becomes a hard error rather
+# than a silent pass, which is what a negative guard has to do. It also scans
+# the 117 MB binary once instead of once per path.
+STRINGS_FILE="$BUILD_DIR/openp2s.strings"
+strings -a "$TMP_OUT" > "$STRINGS_FILE" \
+    || die "could not inspect the executable with strings"
+
 for leaked in "$REPO_ROOT" "$BUILD_DIR"; do
-    if strings -a "$TMP_OUT" 2>/dev/null | grep -qF "$leaked"; then
+    if grep -Fq "$leaked" "$STRINGS_FILE"; then
         die "the executable embeds the build path $leaked, so it is not reproducible elsewhere"
     fi
 done
+rm -f "$STRINGS_FILE"
 
 mv "$TMP_OUT" "$OUT"
 trap - EXIT

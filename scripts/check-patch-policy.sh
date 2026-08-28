@@ -108,9 +108,14 @@ ok "adds exactly the 2 replacement constants, once each (plus comments)"
 #
 # Narrower than "no behaviour from the environment", which cannot be proved
 # here: only that no patch reintroduces a getenv()-based opt-in.
+# Captured first, so a failure of the parser is an error rather than an empty
+# result that reads as "clean".
+GETENV_RE='(^|[^_[:alnum:]])(secure_)?getenv[[:space:]]*\('
 for patch_file in patches/*/*.patch; do
-    if diff_added_lines "$patch_file" | grep -qE '(^|[^_[:alnum:]])(secure_)?getenv[[:space:]]*\('; then
-        diff_added_lines "$patch_file" | grep -nE '(^|[^_[:alnum:]])(secure_)?getenv[[:space:]]*\(' >&2
+    added="$(diff_added_lines "$patch_file")" \
+        || die "could not read the added lines of $patch_file"
+    if grep -Eq "$GETENV_RE" <<<"$added"; then
+        grep -nE "$GETENV_RE" <<<"$added" >&2
         die "$patch_file adds a getenv() call; the environment-variable opt-in is not shippable"
     fi
 done

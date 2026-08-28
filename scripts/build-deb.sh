@@ -319,7 +319,7 @@ for path in ./usr/bin/openp2s \
             ./usr/share/doc/openp2s/openvpn-COPYING \
             ./usr/share/doc/openp2s/NODE_LICENSE \
             ./usr/share/doc/openp2s/THIRD_PARTY_NOTICES; do
-    printf '%s\n' "$CONTENTS" | grep -q " $path\$" || die "missing from the package: $path"
+    grep -q " $path\$" <<<"$CONTENTS" || die "missing from the package: $path"
 done
 
 # The packaged OpenVPN must be the one its own BUILDINFO describes. This is the
@@ -342,8 +342,9 @@ PKG_CLI_VERSION="$("$PKG_DIR/usr/bin/openp2s" --version 2>/dev/null)" \
     || die "the packaged CLI reports $PKG_CLI_VERSION, expected $VERSION"
 
 # The package must not claim to provide the system openvpn.
-FIELDS="$(dpkg-deb --field "$DEB" Provides Conflicts Replaces || true)"
-if printf '%s\n' "$FIELDS" | grep -qw openvpn; then
+FIELDS="$(dpkg-deb --field "$DEB" Provides Conflicts Replaces)" \
+    || die "could not read the package control fields"
+if grep -qw openvpn <<<"$FIELDS"; then
     die "the package must not provide, conflict with or replace openvpn"
 fi
 

@@ -222,7 +222,7 @@ else
         # Read once: under pipefail a SIGPIPE from head could decide this.
         version_output="$("$BINARY" --version 2>&1 || true)"
         first_line="$(printf '%s\n' "$version_output" | sed -n '1p')"
-        if printf '%s\n' "$first_line" | grep -Fq "OpenVPN $VERSION"; then
+        if grep -Fq "OpenVPN $VERSION" <<<"$first_line"; then
             ok "binary reports OpenVPN $VERSION"
         else
             bad "binary does not report OpenVPN $VERSION"

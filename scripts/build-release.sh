@@ -84,7 +84,7 @@ log "verifying inputs"
 CLI_VERSION="$("$CLI" --version 2>/dev/null)" || die "$CLI does not run"
 [ "$CLI_VERSION" = "$VERSION" ] || die \
     "the built CLI reports $CLI_VERSION but package.json says $VERSION; rerun scripts/build-cli.sh"
-"$CLI" --help 2>&1 | grep -q 'openp2s' || die "$CLI does not print OpenP2S help"
+"$CLI" --help 2>&1 | grep 'openp2s' >/dev/null || die "$CLI does not print OpenP2S help"
 
 # Fail closed: a release builder that leaves this as a suggestion will
 # eventually publish something unverified.
@@ -198,11 +198,11 @@ BUNDLED_VERSION="$("$STAGE/openp2s" --version 2>&1)" || die "the bundled CLI doe
 LOCATED="$( cd "$STAGE" && ./openp2s inspect \
     "$REPO_ROOT/tests/fixtures/azure-schema.xml" --compat 2>&1 )" \
     || die "the bundled CLI cannot inspect a profile"
-printf '%s\n' "$LOCATED" | grep -q "openvpn-openp2s" || die \
+grep -q "openvpn-openp2s" <<<"$LOCATED" || die \
 "the bundled CLI did not find openvpn-openp2s beside itself.
 The portable bundle is meant to work in place; without sibling discovery it
 cannot. See locateOpenVpnBinary in src/openvpn/binary.ts."
-printf '%s\n' "$LOCATED" | grep -q "USER_PASS_LEN: *4096" \
+grep -q "USER_PASS_LEN: *4096" <<<"$LOCATED" \
     || die "the bundled CLI does not report USER_PASS_LEN 4096 for its OpenVPN"
 
 # ---------------------------------------------------------- publication ---

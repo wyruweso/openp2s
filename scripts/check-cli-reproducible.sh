@@ -78,8 +78,13 @@ compare "CLI-BUILDINFO" "$DIR_A/CLI-BUILDINFO" "$DIR_B/CLI-BUILDINFO" \
 compare "executable" "$WORK/openp2s-a" "$WORK/openp2s-b"
 
 # Even with matching hashes, an embedded path means the next build differs.
+# One scan into a file, then plain greps: no pipeline to lose a match in, and
+# a failing `strings` is an error rather than a silent pass.
+strings -a "$WORK/openp2s-a" > "$WORK/strings-a" \
+    || die "could not inspect the executable with strings"
+
 for path in "$DIR_A" "$DIR_B" "$WORK"; do
-    if strings -a "$WORK/openp2s-a" 2>/dev/null | grep -qF "$path"; then
+    if grep -Fq "$path" "$WORK/strings-a"; then
         die "the executable embeds the build path $path"
     fi
 done

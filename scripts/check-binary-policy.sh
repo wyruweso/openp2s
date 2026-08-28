@@ -87,10 +87,12 @@ ok "binary matches its BUILDINFO ($ACTUAL_SHA)"
 #
 # Read once: `--version | head -1 | grep -q` lets a SIGPIPE decide the answer
 # under pipefail, which here would pass a forbidden PKCS11 build.
-VERSION_OUTPUT="$("$BINARY" --version 2>&1 || true)"
+VERSION_OUTPUT="$("$BINARY" --version 2>&1)" || die "$BINARY --version failed"
 [ -n "$VERSION_OUTPUT" ] || die "$BINARY --version produced nothing"
-VERSION_LINE="$(printf '%s\n' "$VERSION_OUTPUT" | sed -n '1p')"
+VERSION_LINE="${VERSION_OUTPUT%%$'\n'*}"
 
+# OpenVPN exits non-zero for --help, so the status is not a usable signal;
+# emptiness is, and is checked below.
 HELP_OUTPUT="$("$BINARY" --help 2>&1 || true)"
 [ -n "$HELP_OUTPUT" ] || die "$BINARY --help produced nothing"
 
@@ -109,9 +111,14 @@ keylog
 tls-keylog
 "
 
+# A here-string, not a pipeline. `grep -q` exits on the first match and closes
+# the pipe while the producer is still writing, and under `set -o pipefail` the
+# producer's EPIPE then becomes the pipeline's status - so a *successful* match
+# can be reported as a failure. Measured at roughly 1 run in 100 against this
+# 34 KB help text, which is exactly the kind of flake that wastes an afternoon.
 for opt in $FORBIDDEN_OPTIONS; do
     # Whole token, so --azure-compat does not match --azure-compat-other.
-    if printf '%s\n' "$HELP_OUTPUT" | grep -Eq -- "(^|[[:space:]])--${opt}([=,[:space:]]|\$)"; then
+    if grep -Eq -- "(^|[[:space:]])--${opt}([=,[:space:]]|\$)" <<<"$HELP_OUTPUT"; then
         die "the default build understands --$opt; it must be an opt-in build only"
     fi
 done
@@ -119,7 +126,7 @@ ok "understands none of the TLS-shaping or key-logging research options"
 
 # The one capability the binary must have, so the flag does not die with
 # "unknown option" on a gateway that needs it.
-if ! printf '%s\n' "$HELP_OUTPUT" | grep -Eq -- '(^|[[:space:]])--experimental-azure-compat([=,[:space:]]|$)'; then
+if ! grep -Eq -- '(^|[[:space:]])--experimental-azure-compat([=,[:space:]]|$)' <<<"$HELP_OUTPUT"; then
     die "the binary does not understand --experimental-azure-compat; there is one build and it must carry the patch"
 fi
 ok "understands --experimental-azure-compat (compiled in, off by default)"
@@ -127,7 +134,7 @@ ok "understands --experimental-azure-compat (compiled in, off by default)"
 # misc.h already defines USER_PASS_LEN as 4096 under #ifdef ENABLE_PKCS11, so
 # an autodetected pkcs11-helper would make the patch inert while every other
 # check still passed.
-if printf '%s\n' "$VERSION_LINE" | grep -q '\[PKCS11\]'; then
+if grep -q '\[PKCS11\]' <<<"$VERSION_LINE"; then
     die "the build has PKCS11 support, so upstream's PKCS11 USER_PASS_LEN branch is active and the patch is inert"
 fi
 ok "PKCS11 support is absent, so upstream's 4096 branch is not what is active"
