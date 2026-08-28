@@ -25,14 +25,33 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
-      # The linter, the formatter, the type checker and the type definitions
-      # travel together and are reviewed as one change: none of them puts a
-      # byte into a shipped artifact.
+      # The linter and the formatter travel together and are reviewed as one
+      # change: neither puts a byte into a shipped artifact, and neither
+      # constrains what the compiler will accept. @types/node and typescript
+      # are excluded because both do - see `ignore` below.
       dev-tooling:
         dependency-type: development
         exclude-patterns:
           - esbuild
           - postject
+          - '@types/node'
+          - typescript
+
+    ignore:
+      # Two dev dependencies are version-constrained by things Dependabot
+      # cannot see, so their major bumps are decided by hand.
+      #
+      # @types/node tracks the Node embedded in the executable, pinned in
+      # .node-version. Newer typings would let tsc accept APIs that are absent
+      # from the runtime inside the shipped binary: it compiles, then fails
+      # when a user runs it. Bump this when .node-version moves, not before.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # typescript-eslint peers on typescript >=4.8.4 <6.1.0, so TypeScript 6
+      # and 7 cannot resolve at all - `npm ci` fails outright. Bump this once
+      # typescript-eslint widens that range.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
     # Everything else stays ungrouped, one pull request each, on purpose:
     #
     #   @azure/msal-node, commander, fast-xml-parser
