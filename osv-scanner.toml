@@ -1,0 +1,36 @@
+# Vulnerabilities reviewed and accepted, next to the manifest they apply to.
+#
+# This file suppresses a finding; it does not fix one. So an entry earns its
+# place by stating why the vulnerable code cannot be reached from here, and by
+# carrying an ignoreUntil - the exception expires and has to be argued again,
+# rather than becoming permanent through neglect.
+#
+# Read by osv-scanner and by the OpenSSF Scorecard Vulnerabilities check.
+
+[[IgnoredVulns]]
+id = "GHSA-c2qf-rxjj-qqgw"
+ignoreUntil = 2026-11-30
+reason = """
+semver ReDoS (CVE-2022-25883), reachable only through `new Range` when an
+untrusted string is supplied as the range. Neither half of that holds here.
+
+Not reachable: the affected copy is semver 7.3.8, vendored inside the snyk
+CLI's bundled global-agent, whose only two semver call sites are
+`semver.gte(process.version, 'v11.7.0')` and the same against 'v10.0.0'.
+gte() goes to compare() and `new SemVer()`; it never constructs a Range. The
+only function in that copy which requires classes/range.js - the file the
+advisory cites - is satisfies(), which global-agent does not call. Both
+arguments are Node's own version string and a hardcoded literal, so there is
+no untrusted input either.
+
+Not shipped: snyk is a development dependency that runs in CI, and is absent
+from the executable. The semver that does ship is 7.8.5, via
+@azure/msal-node > jsonwebtoken, which is past the 7.5.2 fix.
+
+Not fixable from here: snyk 1.1307.0 is the latest release, and it declares
+global-agent in bundleDependencies, so semver 7.3.8 is frozen inside its
+tarball. npm overrides cannot rewrite a bundled dependency - this was tried.
+
+Revisit when snyk publishes a release that re-bundles global-agent, which is
+also what should retire this entry ahead of the expiry above.
+"""
