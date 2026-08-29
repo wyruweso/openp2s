@@ -1,0 +1,120 @@
+name: Snyk
+
+# Independent dependency vulnerability scanning.
+#
+# Two GitHub-native security controls already cover adjacent concerns:
+#
+#   Dependabot     alerts when dependencies in the default branch become
+#                  known-vulnerable and proposes version updates
+#   CodeQL         scans the source we write
+#
+# Snyk deliberately overlaps Dependabot's vulnerability detection as a second,
+# independent SCA engine. Different advisory sources and matching logic can
+# surface different findings, and this workflow additionally makes
+# high/critical dependency vulnerabilities an explicit CI failure.
+#
+# It runs on a timer because dependency risk can change without the repository
+# changing: a vulnerability may be disclosed today against a version that has
+# been locked for weeks.
+#
+# Snyk Code (SAST) is deliberately not run. CodeQL default setup is enabled on
+# this repository for javascript-typescript and actions, so a second SAST
+# engine would add considerably more overlap than value.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+# No `pull_request` trigger: secrets are unavailable to fork pull requests, and
+# `security-events: write` has no business in a job running unreviewed code.
+permissions: {}
+
+concurrency:
+  group: snyk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    name: dependency vulnerabilities
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      # The token is scoped to the two steps that need it rather than the job,
+      # so it is absent from `npm ci` and the lifecycle scripts it runs.
+      #
+      # Checked up front because otherwise a missing secret surfaces much
+      # later as an authentication error that reads like a Snyk outage.
+      - name: Require a Snyk token
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -z "${SNYK_TOKEN:-}" ]; then
+            echo "::error::SNYK_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+
+      # Not snyk/actions/node: it is a Docker action wrapping the floating
+      # `snyk/snyk:node` tag, so pinning its SHA would pin the wrapper while
+      # the code that runs kept moving. Bump by hand - Dependabot has no
+      # ecosystem for a version in a workflow, as with the OpenVPN pin.
+      - name: Install the Snyk CLI
+        run: npm install --global snyk@1.1307.0
+
+      # Snyk can analyze package-lock.json without an installed dependency
+      # tree. Installing first also validates that the locked tree is
+      # installable in the same Node environment used by the project before it
+      # is scanned.
+      - run: npm ci
+
+      # The exit code is recorded rather than allowed to fail the step: it has
+      # to survive until the SARIF is uploaded, and it distinguishes findings
+      # from a broken scan. Both are decided in the last step.
+      - name: Snyk Open Source
+        id: test
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          code=0
+          snyk test --severity-threshold=high --sarif-file-output=snyk.sarif || code=$?
+          echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+
+      # An outage or an expired token fails the step above without writing a
+      # report; uploading nothing fails less usefully than what it already
+      # logged.
+      - name: Upload results to code scanning
+        if: always() && hashFiles('snyk.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: snyk.sarif
+          # Its own set, so these and the CodeQL results cannot overwrite
+          # each other.
+          category: snyk-open-source
+
+      # Only exit 1 means "found something". 2 and 3 are scan failures, and
+      # Snyk reserves further operational codes (69, 75, 77), so a report of a
+      # vulnerability is made only when Snyk actually reported one.
+      - name: Report the outcome
+        if: steps.test.outputs.exit-code != '0'
+        env:
+          EXIT_CODE: ${{ steps.test.outputs.exit-code }}
+        run: |
+          case "${EXIT_CODE}" in
+            1) echo "::error::Snyk found a high or critical severity vulnerability. See the Security tab." ;;
+            3) echo "::error::Snyk found no supported project to scan (exit 3). No dependencies were checked." ;;
+            *) echo "::error::The Snyk scan did not complete (exit ${EXIT_CODE}). This is a scan failure, not a vulnerability report." ;;
+          esac
+          exit 1
