@@ -20,7 +20,7 @@ import { probeCommand } from './commands/probe.ts';
 import { statusCommand } from './commands/status.ts';
 import { Ui } from './ui.ts';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 /** Options every command accepts. */
 interface RootOptions {
