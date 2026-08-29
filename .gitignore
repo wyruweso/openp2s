@@ -3,6 +3,9 @@ build/
 dist/
 *.tsbuildinfo
 
+# Scan report written by `npm run snyk:test -- --sarif-file-output`.
+snyk.sarif
+
 # Never commit real Azure profiles or captured secrets.
 #
 # A real export arrives named azurevpnconfig.xml, so the accident to guard

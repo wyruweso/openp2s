@@ -82,7 +82,33 @@ including a backup of it.
 
 ## Reporting vulnerabilities
 
-Please report security issues privately through GitHub Security Advisories on
-this repository, rather than opening a public issue. Include the OpenP2S
-version from `openp2s --version` and the OpenVPN provenance from
-`openp2s status --verbose`.
+Please report security issues privately, rather than opening a public issue:
+
+<https://github.com/wyruweso/openp2s/security/advisories/new>
+
+That is GitHub's private vulnerability reporting for this repository, which is
+enabled: a report is visible only to the maintainer until an advisory is
+published. Include the OpenP2S version from `openp2s --version` and the
+OpenVPN provenance from `openp2s status --verbose`.
+
+### In scope
+
+The classes of issue this project most wants to hear about:
+
+- exposure or persistence of an Entra access or refresh token;
+- command or configuration injection, particularly anything reaching the
+  generated OpenVPN config, which is read by a process running as root;
+- privilege escalation across the `sudo` boundary described above;
+- unsafe handling of a hostile VPN profile;
+- anything that would let the OpenVPN tarball, patch, or binary verification
+  in `scripts/verify-provenance.sh` be bypassed or weakened.
+
+The local security assumptions above are deliberate rather than oversights.
+In particular, OpenP2S does not defend against code already running as your
+own user, and says so.
+
+### Response
+
+I will acknowledge a report as soon as practical and aim to give an initial
+assessment within 7 days. OpenP2S is maintained by one person, so please allow
+time for a fix to be prepared and released before disclosing publicly.

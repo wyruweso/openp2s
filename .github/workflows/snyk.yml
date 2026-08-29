@@ -67,29 +67,24 @@ jobs:
           node-version-file: '.node-version'
           cache: npm
 
-      # Not snyk/actions/node: it is a Docker action wrapping the floating
-      # `snyk/snyk:node` tag, so pinning its SHA would pin the wrapper while
-      # the code that runs kept moving. Bump by hand - Dependabot has no
-      # ecosystem for a version in a workflow, as with the OpenVPN pin.
-      - name: Install the Snyk CLI
-        run: npm install --global snyk@1.1307.0
-
-      # Snyk can analyze package-lock.json without an installed dependency
-      # tree. Installing first also validates that the locked tree is
-      # installable in the same Node environment used by the project before it
-      # is scanned.
+      # Installs the scanner along with everything else. `snyk` is a pinned
+      # dev dependency rather than an `npm install --global` here, so the
+      # tarball is fixed by the lockfile's integrity hash instead of by
+      # whatever the registry serves for that version today. It is also not
+      # snyk/actions/node, which wraps the floating `snyk/snyk:node` image.
       - run: npm ci
 
-      # The exit code is recorded rather than allowed to fail the step: it has
-      # to survive until the SARIF is uploaded, and it distinguishes findings
-      # from a broken scan. Both are decided in the last step.
+      # The severity policy lives in the npm script, so this gate can be run
+      # locally exactly as CI runs it. Deliberately not part of `npm run
+      # check`: that runs in the release build, which has no Snyk token and
+      # must not depend on a third-party service being reachable.
       - name: Snyk Open Source
         id: test
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           code=0
-          snyk test --severity-threshold=high --sarif-file-output=snyk.sarif || code=$?
+          npm run snyk:test -- --sarif-file-output=snyk.sarif || code=$?
           echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
 
       # An outage or an expired token fails the step above without writing a
