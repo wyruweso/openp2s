@@ -29,6 +29,14 @@ function loadProfile(name = 'valid-full'): AzureVpnProfile {
 
 const MANAGEMENT_SOCKET = '/run/user/1000/openp2s/mgmt.sock';
 
+/**
+ * Assert the config contains this exact line. Interpolating a path into a
+ * regex would need escaping to be correct; comparing whole lines does not.
+ */
+function assertLine(config: string, line: string): void {
+  assert.ok(config.split('\n').includes(line), `expected line ${JSON.stringify(line)}`);
+}
+
 /** What `connect` renders: credentials over the management socket. */
 function render(profile = loadProfile(), overrides: Record<string, unknown> = {}): string {
   return renderOpenVpnConfig({
@@ -102,7 +110,7 @@ describe('renderOpenVpnConfig: security invariants', () => {
   it('configures OpenVPN to connect to our socket, not create its own', () => {
     // management-client is what lets OpenP2S create the socket at 0600
     // before OpenVPN starts. Without it OpenVPN listens and would replace it.
-    assert.match(config, new RegExp(`^management ${MANAGEMENT_SOCKET} unix$`, 'm'));
+    assertLine(config, `management ${MANAGEMENT_SOCKET} unix`);
     assert.match(config, /^management-client$/m);
     assert.match(config, /^management-query-passwords$/m);
     assert.match(config, /^management-hold$/m);
@@ -110,7 +118,7 @@ describe('renderOpenVpnConfig: security invariants', () => {
 
   it('still references a credentials file in the fallback configuration', () => {
     const fallback = renderWithFile();
-    assert.match(fallback, new RegExp(`^auth-user-pass ${CREDENTIALS_PATH}$`, 'm'));
+    assertLine(fallback, `auth-user-pass ${CREDENTIALS_PATH}`);
     assert.ok(!fallback.includes('management'));
   });
 
@@ -303,9 +311,9 @@ describe('connect = convert + credential delivery', () => {
   it('carries the same gateway, cipher, CA and tls-auth key in every mode', () => {
     const profile = loadProfile();
     for (const config of [render(), renderWithFile(), renderPortable()]) {
-      assert.match(config, new RegExp(`^remote ${profile.gateway} 443$`, 'm'));
+      assertLine(config, `remote ${profile.gateway} 443`);
       assert.match(config, /^cipher AES-256-GCM$/m);
-      assert.match(config, new RegExp(`^ca ${CA_PATH.replace(/\./g, '\\.')}$`, 'm'));
+      assertLine(config, `ca ${CA_PATH}`);
       assert.match(config, /^key-direction 1$/m);
       const body = config
         .slice(config.indexOf('<tls-auth>'), config.indexOf('</tls-auth>'))
@@ -412,7 +420,7 @@ describe('inline CA', () => {
       caPath: CA_PATH,
       standalone: true,
     });
-    assert.match(config, new RegExp(`^ca ${CA_PATH.replace(/\./g, '\\.')}$`, 'm'));
+    assertLine(config, `ca ${CA_PATH}`);
     assert.ok(!config.includes('<ca>'));
   });
 });
