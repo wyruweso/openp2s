@@ -48,7 +48,7 @@ the cached session.
 ### Debian / Ubuntu
 
 Download `openp2s_<version>_amd64.deb` from the
-[releases page](https://github.com/openp2s/openp2s/releases), then:
+[releases page](https://github.com/wyruweso/openp2s/releases), then:
 
 ```bash
 sha256sum --check SHA256SUMS
