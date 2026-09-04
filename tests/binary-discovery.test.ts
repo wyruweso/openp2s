@@ -57,7 +57,7 @@ function plantBuildInfo(dir: string, binary: string, options: { matching: boolea
 
 describe('sibling discovery', () => {
   it('finds openvpn-openp2s beside the executable', () => {
-    const bundle = join(workDir, 'openp2s-0.1.2-linux-amd64');
+    const bundle = join(workDir, 'openp2s-0.2.0-linux-amd64');
     const openvpn = plantBundle(bundle, 'openvpn-openp2s');
     const cli = plantBundle(bundle, 'openp2s');
 
