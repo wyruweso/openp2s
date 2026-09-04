@@ -6,9 +6,10 @@
  * Two rules hold across all three:
  *
  *   - **The identity comes from `resolveAuthIdentity()`.** The cache key is
- *     (authority, audience, clientId), so if these commands computed it
+ *     (authority, audience, clientId, flow), so if these commands computed it
  *     differently a `--client-id` override would make `login` write a session
- *     that `status` cannot see and `clear` cannot delete.
+ *     that `status` cannot see and `clear` cannot delete. `status` and `clear`
+ *     take no flow: they cover every key the identity could live under.
  *   - **Storage is reached only through `TokenCacheStore`.** Reading the cache
  *     files directly would defeat the abstraction whose whole purpose is to
  *     allow a Secret Service or KWallet backend later, and would bypass the
@@ -20,7 +21,8 @@
  * touches no `secret` field.
  */
 
-import { cacheKey } from '../../auth/cache/identity.ts';
+import type { InteractiveFlow } from '../../auth/entra.ts';
+import { cacheKeysForIdentity } from '../../auth/cache/identity.ts';
 import type { TokenCacheStore } from '../../auth/cache/store.ts';
 import { AuthError } from '../../errors.ts';
 import {
@@ -42,6 +44,8 @@ export interface AuthStatusOptions extends GlobalOptions {
 
 export interface AuthLoginOptions extends GlobalOptions {
   readonly clientId?: string;
+  /** Which interactive sign-in flow to use. */
+  readonly authFlow?: InteractiveFlow;
   readonly scope?: string;
   /** Ignore any cached session and force an interactive sign-in. */
   readonly force?: boolean;
@@ -173,8 +177,8 @@ function describeAccessTokens(summary: CacheSummary): string {
  * `openp2s auth login <profile.xml>`
  *
  * Sign in and populate the token cache, without connecting. Necessary before
- * anything non-interactive, since a device-code prompt cannot be answered by
- * a script.
+ * anything non-interactive, since neither a browser nor a device-code prompt
+ * can be answered by a script.
  */
 export async function authLoginCommand(
   profilePath: string,
@@ -185,7 +189,10 @@ export async function authLoginCommand(
 
   const profile = await loadProfile(profilePath);
   const identity = resolveAuthIdentity(profile, options);
-  const authenticator = createAuthenticator(context, profile, options);
+  const authenticator = createAuthenticator(context, profile, {
+    ...options,
+    ...(options.authFlow ? { flow: options.authFlow } : {}),
+  });
 
   ui.heading(`Sign in: ${profile.name}`);
   ui.fields([
@@ -233,12 +240,18 @@ export async function authStatusCommand(options: AuthStatusOptions = {}): Promis
 
   let keys = await store.list();
 
+  // The key is a digest, so its flow is only knowable from an identity.
+  // Without a profile the listing omits the field rather than guessing.
+  const flowByKey = new Map<string, string>();
+
   // Narrow to one identity when a profile is given, computed exactly as
   // `login` and `clear` compute it.
   if (options.profile) {
     const profile = await loadProfile(options.profile);
-    const wanted = cacheKey(resolveAuthIdentity(profile, options));
-    keys = keys.filter((key) => key === wanted);
+    for (const ref of cacheKeysForIdentity(resolveAuthIdentity(profile, options))) {
+      flowByKey.set(ref.key, ref.flow ?? 'device-code (cached by OpenP2S 0.1.x)');
+    }
+    keys = keys.filter((key) => flowByKey.has(key));
   }
 
   if (keys.length === 0) {
@@ -246,8 +259,10 @@ export async function authStatusCommand(options: AuthStatusOptions = {}): Promis
       options.profile ? 'No cached Entra session for this profile.' : 'No cached Entra sessions.',
     );
     ui.line();
-    ui.line('A device-code sign-in will run on the next connect, or run:');
+    ui.line('The next connect will sign in through your browser, or sign in now with:');
     ui.line('  openp2s auth login <profile.xml>');
+    ui.line();
+    ui.line('On a machine with no browser, add --auth device-code.');
     return 0;
   }
 
@@ -258,6 +273,8 @@ export async function authStatusCommand(options: AuthStatusOptions = {}): Promis
     ui.line();
     ui.fields([
       ['Cache', key],
+      // Two flows against one tenant are otherwise told apart only by a digest.
+      ['Flow', flowByKey.get(key)],
       ['Accounts', summary.accounts.length > 0 ? summary.accounts : ['(none recorded)']],
       ['Tenants', summary.tenants.length > 0 ? summary.tenants : ['(none recorded)']],
       ['Access tokens', describeAccessTokens(summary)],
@@ -270,7 +287,8 @@ export async function authStatusCommand(options: AuthStatusOptions = {}): Promis
   ui.line();
   ui.line('A cached refresh token usually means the next connect signs in silently,');
   ui.line('but Conditional Access or a revoked session can require fresh authentication');
-  ui.line('at any time. OpenP2S falls back to device-code sign-in when that happens.');
+  ui.line('at any time. OpenP2S then repeats the sign-in flow you asked for; it never');
+  ui.line('switches to device code on its own.');
 
   return 0;
 }
@@ -307,7 +325,11 @@ export async function authClearCommand(options: AuthClearOptions = {}): Promise<
 
   const profile = await loadProfile(options.profile);
   // A store operation, not an auth operation: no MSAL client is needed.
-  await store.delete(cacheKey(resolveAuthIdentity(profile, options)));
+  // Every key the identity could live under: "forget this profile" means all
+  // of it, whichever flow or version wrote it.
+  for (const ref of cacheKeysForIdentity(resolveAuthIdentity(profile, options))) {
+    await store.delete(ref.key);
+  }
 
   ui.ok(`Cleared the cached Entra session for ${profile.name}`);
   return 0;

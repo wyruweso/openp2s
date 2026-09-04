@@ -89,6 +89,29 @@ mode 0600.
 .TP
 .I /usr/lib/openp2s/openvpn
 The patched OpenVPN binary.
+.SH AUTHENTICATION
+Sign-in uses the browser authorization-code flow with PKCE: OpenP2S opens a
+Microsoft sign-in page and listens briefly on 127.0.0.1 for the reply. The
+authorization code is bound to a one-time verifier generated locally, so an
+intercepted code cannot be redeemed without the verifier.
+.PP
+The browser must be on the machine running
+.BR openp2s :
+the reply reaches a listener on 127.0.0.1 here, so a browser elsewhere cannot
+complete the sign-in. If no browser can be opened, the command fails rather
+than waiting.
+.PP
+.B \-\-auth device-code
+prints a code to enter on another device. It is the only flow that works with
+no local browser, and is opt-in: the device-code flow is susceptible to
+phishing, because an attacker may start the flow and persuade the user to
+approve their sign-in. Organisations can block it.
+.PP
+OpenP2S does not fall back from one flow to the other. A Conditional Access
+denial, or an application that does not permit the loopback redirect, would
+otherwise be hidden by a silent retry.
+.PP
+Cached sessions are scoped to the flow that created them.
 .SH PRIVILEGES
 .B openp2s
 runs as you, and asks for elevation only where root is genuinely required: the

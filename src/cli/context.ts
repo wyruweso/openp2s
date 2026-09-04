@@ -11,6 +11,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FileTokenCacheStore } from '../auth/cache/fileStore.ts';
 import type { TokenCacheStore } from '../auth/cache/store.ts';
+import { openInBrowser } from '../auth/browser.ts';
+import type { InteractiveFlow } from '../auth/entra.ts';
 import { EntraAuthenticator } from '../auth/entra.ts';
 import { ProfileError } from '../errors.ts';
 import { SystemdResolvedConfigurator } from '../network/systemdResolved.ts';
@@ -85,6 +87,8 @@ export function createCacheStore(context: CommandContext): TokenCacheStore {
 }
 
 export interface AuthOverrides {
+  /** Which interactive flow to use. Omitted means DEFAULT_FLOW ('browser'). */
+  readonly flow?: InteractiveFlow;
   readonly clientId?: string | undefined;
   readonly scope?: string | undefined;
 }
@@ -118,8 +122,15 @@ export function createAuthenticator(
   return new EntraAuthenticator({
     auth: resolveAuthIdentity(profile, overrides),
     store: createCacheStore(context),
+    ...(overrides.flow ? { flow: overrides.flow } : {}),
     onDeviceCode: (prompt) => context.ui.deviceCode(prompt.verificationUri, prompt.userCode),
     onDebug: (message) => context.ui.debug(message),
+    // Open first, announce second: openInBrowser() throws when nothing here
+    // can open a URL, and "continue in your browser" would be a lie.
+    openBrowser: async (url) => {
+      await openInBrowser(url);
+      context.ui.browserPrompt();
+    },
   });
 }
 

@@ -7,6 +7,7 @@
  * anything it does not positively recognise, rather than to sanitise.
  */
 
+import { entraLoginHosts, isEntraLoginHost } from '../auth/loginHosts.ts';
 import { ProfileError } from '../errors.ts';
 
 /** Longest legal DNS name, and longest legal label. */
@@ -181,25 +182,6 @@ export function validatePrefix(value: string, field: string): ParsedPrefix {
   return { address, prefixLength, family, cidr: `${address}/${prefixLength}` };
 }
 
-/**
- * Hosts we will accept as an Entra authority.
- *
- * The tenant URL decides where OpenP2S sends an authentication request, so it
- * is the single most security-sensitive field in the profile: a hostile
- * profile that redirected it elsewhere would be a credential-phishing
- * primitive. Restricting it to Microsoft's published login endpoints (global
- * plus the sovereign clouds) means a malicious profile cannot point the login
- * at an attacker's server.
- */
-const ENTRA_AUTHORITY_HOSTS: ReadonlySet<string> = new Set([
-  'login.microsoftonline.com',
-  'login.microsoftonline.us',
-  'login.partner.microsoftonline.cn',
-  'login.microsoftonline.de',
-  'login.chinacloudapi.cn',
-  'login.usgovcloudapi.net',
-]);
-
 export interface ParsedTenant {
   /**
    * Normalised authority URL: https, the recognised host, and the tenant
@@ -233,22 +215,29 @@ export function validateTenantUrl(value: string, field = 'tenant'): ParsedTenant
   if (url.username || url.password) {
     throw new ProfileError(`<${field}> must not contain credentials: ${raw}`);
   }
+  // WHATWG URL erases :443, so anything left is non-standard - and would be
+  // dropped when the authority is rebuilt below, sending credentials somewhere
+  // other than the profile asked for.
+  if (url.port !== '') {
+    throw new ProfileError(`<${field}> must not use a non-standard port: ${raw}`);
+  }
 
+  // Where OpenP2S sends an authentication request: the most security-sensitive
+  // field in the profile, and a credential-phishing primitive if it pointed
+  // elsewhere. The allowlist is shared with the browser opener.
   const host = url.hostname.toLowerCase();
-  if (!ENTRA_AUTHORITY_HOSTS.has(host)) {
+  if (!isEntraLoginHost(host)) {
     throw new ProfileError(`<${field}> is not a recognised Microsoft Entra endpoint: ${host}`, {
       hint:
         'OpenP2S only sends credentials to Microsoft login endpoints. ' +
-        `Recognised hosts: ${[...ENTRA_AUTHORITY_HOSTS].join(', ')}`,
+        `Recognised hosts: ${entraLoginHosts().join(', ')}`,
     });
   }
 
-  // A tenant URL is a host and a tenant identifier, nothing more. Anything
-  // else was silently discarded before: `.../tenant/foo?x=1#bar` normalised to
-  // `.../tenant` and validated clean. That is not a security bypass - the host
-  // allowlist above still decides where credentials go - but a profile with
-  // junk in its tenant URL is malformed, and saying so beats quietly
-  // reinterpreting it.
+  // A tenant URL is a host and a tenant identifier, nothing more. Extra parts
+  // are not a security bypass - the host allowlist above still decides where
+  // credentials go - but a profile carrying them is malformed, and rejecting
+  // it beats reinterpreting it as something it does not say.
   if (url.search) {
     throw new ProfileError(`<${field}> must not contain a query string: ${raw}`);
   }

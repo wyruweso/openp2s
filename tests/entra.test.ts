@@ -24,7 +24,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { AccountInfo, AuthenticationResult, Configuration } from '@azure/msal-node';
 import { FileTokenCacheStore } from '../src/auth/cache/fileStore.ts';
-import { EntraAuthenticator, explainAuthFailure, type MsalClient } from '../src/auth/entra.ts';
+import { legacyCacheKey } from '../src/auth/cache/identity.ts';
+import {
+  DEFAULT_FLOW,
+  EntraAuthenticator,
+  explainAuthFailure,
+  type InteractiveFlow,
+  type MsalClient,
+} from '../src/auth/entra.ts';
 import { AuthError } from '../src/errors.ts';
 import type { EntraAuthConfig } from '../src/profile/types.ts';
 import { syntheticLongJwt } from './helpers/syntheticToken.ts';
@@ -105,6 +112,20 @@ class FakeMsal implements MsalClient {
     if (this.deviceCode instanceof Error) throw this.deviceCode;
     return this.deviceCode;
   }
+
+  interactiveRequests: Array<{ scopes: string[] }> = [];
+  openedUrls: string[] = [];
+  interactive: AuthenticationResult | Error | null = null;
+
+  async acquireTokenInteractive(request: {
+    scopes: string[];
+    openBrowser: (url: string) => Promise<void>;
+  }): Promise<AuthenticationResult | null> {
+    this.interactiveRequests.push({ scopes: request.scopes });
+    await request.openBrowser('https://login.microsoftonline.com/fake/authorize');
+    if (this.interactive instanceof Error) throw this.interactive;
+    return this.interactive;
+  }
 }
 
 let cacheDir: string;
@@ -128,14 +149,21 @@ afterEach(() => {
 function authenticator(
   auth: EntraAuthConfig = AUTH,
   client: MsalClient = msal,
+  // Pinned, so changing DEFAULT_FLOW does not move this whole file onto the
+  // other flow.
+  flow: InteractiveFlow = 'device-code',
 ): EntraAuthenticator {
   return new EntraAuthenticator({
     auth,
     store,
+    flow,
     clientFactory: (_configuration: Configuration) => client,
     onDeviceCode: (prompt) =>
       prompts.push({ userCode: prompt.userCode, verificationUri: prompt.verificationUri }),
     onDebug: (message) => debug.push(message),
+    openBrowser: async (url) => {
+      msal.openedUrls.push(url);
+    },
   });
 }
 
@@ -158,6 +186,7 @@ describe('cache scoping', () => {
       authority: AUTH.authority,
       audience: AUTH.audience,
       clientId: AUTH.clientId,
+      flow: 'device-code',
     });
   });
 });
@@ -223,6 +252,7 @@ describe('silent acquisition', () => {
       ...msal,
       getTokenCache: () => msal.getTokenCache(),
       acquireTokenByDeviceCode: (request) => msal.acquireTokenByDeviceCode(request),
+      acquireTokenInteractive: (request) => msal.acquireTokenInteractive(request),
       acquireTokenSilent: async (request) => {
         call += 1;
         if (call === 1) throw new Error('AADSTS50173: session revoked');
@@ -367,6 +397,7 @@ describe('listAccounts', () => {
       },
       acquireTokenSilent: async () => null,
       acquireTokenByDeviceCode: async () => null,
+      acquireTokenInteractive: async () => null,
     };
 
     assert.deepEqual(await authenticator(AUTH, broken).listAccounts(), []);
@@ -427,5 +458,273 @@ describe('explainAuthFailure', () => {
   it('handles a non-Error value', () => {
     assert.equal(explainAuthFailure(undefined), undefined);
     assert.match(explainAuthFailure('AADSTS65001: consent required') ?? '', /grant consent/);
+  });
+});
+
+describe('flow selection', () => {
+  it('defaults to the browser, whatever the environment says', () => {
+    assert.equal(DEFAULT_FLOW, 'browser');
+  });
+
+  it('uses the browser when no flow is given', async () => {
+    msal.interactive = authResult({});
+    const auth = new EntraAuthenticator({
+      auth: AUTH,
+      store,
+      clientFactory: () => msal,
+      openBrowser: async (url) => {
+        msal.openedUrls.push(url);
+      },
+    });
+
+    await auth.acquireToken();
+    assert.equal(auth.flow, 'browser');
+    assert.deepEqual(msal.deviceCodeRequests, []);
+  });
+});
+
+describe('cache scoping by flow', () => {
+  it('keys browser and device-code sessions separately', () => {
+    // Entra carries "this session came from device code" through refreshes,
+    // so a shared cache would let --auth browser reuse one and never open a
+    // browser - handing the user the flow their org may have blocked.
+    const browser = new EntraAuthenticator({
+      auth: AUTH,
+      store,
+      flow: 'browser',
+      clientFactory: () => msal,
+    });
+    const device = new EntraAuthenticator({
+      auth: AUTH,
+      store,
+      flow: 'device-code',
+      clientFactory: () => msal,
+    });
+
+    assert.notEqual(browser.cacheKey, device.cacheKey);
+  });
+
+  it('does not reuse a device-code session for a browser sign-in', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult({ account: ACCOUNT });
+    await authenticator(AUTH, msal, 'device-code').acquireToken();
+
+    // A fresh authenticator on the browser flow sees an empty cache.
+    const fresh = new FakeMsal();
+    fresh.interactive = authResult({});
+    const browser = new EntraAuthenticator({
+      auth: AUTH,
+      store,
+      flow: 'browser',
+      clientFactory: () => fresh,
+      openBrowser: async (url) => {
+        fresh.openedUrls.push(url);
+      },
+    });
+
+    await browser.acquireToken();
+    assert.equal(fresh.interactiveRequests.length, 1, 'browser flow must sign in afresh');
+  });
+});
+
+describe('the 0.1.x cache entry', () => {
+  const LEGACY = legacyCacheKey(AUTH);
+
+  it('is removed when the cache could not serve the token', async () => {
+    await store.save(LEGACY, '{"stale":true}');
+    msal.deviceCode = authResult({});
+
+    await authenticator().acquireToken();
+
+    assert.equal(await store.load(LEGACY), undefined);
+  });
+
+  it('is removed even when the cache serves the token silently', async () => {
+    await store.save(LEGACY, '{"stale":true}');
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+
+    await authenticator().acquireToken();
+
+    assert.equal(await store.load(LEGACY), undefined);
+  });
+
+  it('leaves the current entry alone', async () => {
+    const auth = authenticator();
+    await store.save(auth.cacheKey, '{"current":true}');
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+
+    await auth.acquireToken();
+
+    assert.notEqual(await store.load(auth.cacheKey), undefined);
+  });
+
+  it('is cleared along with the current one', async () => {
+    const auth = authenticator();
+    await store.save(LEGACY, '{"stale":true}');
+    await store.save(auth.cacheKey, '{"current":true}');
+
+    await auth.clearCache();
+
+    assert.equal(await store.load(LEGACY), undefined);
+    assert.equal(await store.load(auth.cacheKey), undefined);
+  });
+});
+
+describe('browser sign-in', () => {
+  it('uses the browser flow and never the device code one', async () => {
+    msal.interactive = authResult({});
+
+    const outcome = await authenticator(AUTH, msal, 'browser').acquireToken();
+
+    assert.equal(outcome.accessToken.length > 0, true);
+    assert.equal(msal.interactiveRequests.length, 1);
+    assert.deepEqual(msal.deviceCodeRequests, [], 'device code must not be used');
+    assert.deepEqual(prompts, [], 'no device code prompt should be shown');
+  });
+
+  it('asks for the gateway scope', async () => {
+    msal.interactive = authResult({});
+    await authenticator(AUTH, msal, 'browser').acquireToken();
+    assert.deepEqual(msal.interactiveRequests[0]?.scopes, [`${AUTH.audience}/.default`]);
+  });
+
+  it('hands the sign-in URL to the opener', async () => {
+    msal.interactive = authResult({});
+    await authenticator(AUTH, msal, 'browser').acquireToken();
+    assert.equal(msal.openedUrls.length, 1);
+    assert.match(msal.openedUrls[0] ?? '', /^https:\/\//);
+  });
+
+  it('turns an MSAL failure into an AuthError', async () => {
+    msal.interactive = new Error('AADSTS50011: redirect URI mismatch');
+
+    await assert.rejects(
+      () => authenticator(AUTH, msal, 'browser').acquireToken(),
+      (error: unknown) => {
+        assert.ok(error instanceof AuthError);
+        assert.match(error.message, /Entra authentication failed/);
+        return true;
+      },
+    );
+  });
+
+  it('does not fall back to device code when the browser flow fails', async () => {
+    // A Conditional Access denial or a redirect-URI mismatch must surface.
+    // Retrying on another flow would hide the one error worth reading.
+    msal.interactive = new Error('AADSTS53003: blocked by Conditional Access');
+
+    await assert.rejects(() => authenticator(AUTH, msal, 'browser').acquireToken());
+    assert.deepEqual(msal.deviceCodeRequests, []);
+  });
+
+  it('keeps the token out of a failure message', async () => {
+    const token = syntheticLongJwt();
+    msal.interactive = new Error(`request failed with token ${token}`);
+
+    await assert.rejects(
+      () => authenticator(AUTH, msal, 'browser').acquireToken(),
+      (error: unknown) => {
+        const text = String(error);
+        assert.ok(!text.includes(token), 'full token leaked');
+        assert.ok(!text.includes(token.slice(32, 96)), 'token fragment leaked');
+        return true;
+      },
+    );
+  });
+
+  it("keeps the opener's own error and hint", async () => {
+    // Wrapping it would replace a hint naming --auth device-code with whatever
+    // explainAuthFailure() makes of the message, which is nothing.
+    const opener = new EntraAuthenticator({
+      auth: AUTH,
+      store,
+      flow: 'browser',
+      clientFactory: () => msal,
+      openBrowser: async () => {
+        throw new AuthError('could not open a browser on this machine', {
+          hint: 'On a headless machine, run again with --auth device-code.',
+        });
+      },
+    });
+
+    await assert.rejects(
+      () => opener.acquireToken(),
+      (error: unknown) => {
+        assert.ok(error instanceof AuthError);
+        assert.equal(error.message, 'could not open a browser on this machine');
+        assert.match(error.hint ?? '', /--auth device-code/);
+        return true;
+      },
+    );
+  });
+
+  it('raises a clear error when no opener was supplied', async () => {
+    // Nothing in src/auth may spawn a browser of its own, so a caller that
+    // forgets must fail loudly rather than open tabs on whoever runs the code.
+    const bare = new EntraAuthenticator({
+      auth: AUTH,
+      store,
+      flow: 'browser',
+      clientFactory: () => msal,
+    });
+
+    await assert.rejects(() => bare.acquireToken(), /needs a way to open a URL/);
+    assert.equal(msal.interactiveRequests.length, 0);
+  });
+
+  it('honours forceInteractive on the selected flow', async () => {
+    msal.interactive = authResult({});
+    await authenticator(AUTH, msal, 'browser').acquireToken(true);
+    assert.equal(msal.interactiveRequests.length, 1);
+    assert.deepEqual(msal.deviceCodeRequests, []);
+  });
+
+  it('opens no browser when the cache can serve the token', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult({ account: ACCOUNT });
+
+    const outcome = await authenticator(AUTH, msal, 'browser').acquireToken();
+
+    assert.equal(outcome.fromCache, true);
+    assert.deepEqual(msal.openedUrls, [], 'a cached token must not open a browser');
+    assert.equal(msal.interactiveRequests.length, 0);
+  });
+});
+
+describe('flow-specific failure hints', () => {
+  it('explains a loopback rejection in terms of the browser flow', () => {
+    const hint = explainAuthFailure(new Error('AADSTS50011: redirect URI mismatch'), 'browser');
+    assert.match(hint ?? '', /loopback redirect/);
+    assert.match(hint ?? '', /--auth device-code/);
+    assert.match(hint ?? '', /--client-id/);
+  });
+
+  it('does not blame a device code when the browser flow times out', () => {
+    // The same message on the wrong flow sends the user looking for a code
+    // they were never shown.
+    const hint = explainAuthFailure(new Error('request timed out'), 'browser');
+    assert.ok(!/device code expired/i.test(hint ?? ''), hint);
+    assert.match(hint ?? '', /Browser sign-in timed out/i);
+  });
+
+  it('still explains an expired device code on that flow', () => {
+    const hint = explainAuthFailure(new Error('expired_token'), 'device-code');
+    assert.match(hint ?? '', /device code expired/i);
+  });
+
+  it('separates a code never approved from a code that expired', () => {
+    // authorization_pending is the polling response: the code is still good.
+    const pending = explainAuthFailure(new Error('authorization_pending'), 'device-code');
+    assert.match(pending ?? '', /still pending/i);
+    assert.ok(!/expired/i.test(pending ?? ''), pending);
+  });
+
+  it('keeps flow-independent advice for both', () => {
+    for (const flow of ['browser', 'device-code'] as const) {
+      const hint = explainAuthFailure(new Error('AADSTS53003: conditional access'), flow);
+      assert.match(hint ?? '', /Conditional Access/i);
+    }
   });
 });

@@ -22,7 +22,7 @@ configuration → Download VPN client**. Unpack it and find
 **2. Install OpenP2S** (see [Installation](#installation)):
 
 ```bash
-sudo apt install ./openp2s_0.1.0_amd64.deb
+sudo apt install ./openp2s_*_amd64.deb
 ```
 
 **3. Connect:**
@@ -39,9 +39,8 @@ Interface: tun0
 Press Ctrl+C to disconnect.
 ```
 
-The first connection signs you in with a Microsoft Entra device code: OpenP2S
-prints a URL and a short code to enter in a browser. Later connections reuse
-the cached session.
+The first connection opens a Microsoft Entra sign-in page in your browser.
+Later connections reuse the cached session.
 
 ## Installation
 
@@ -111,9 +110,27 @@ only the two operations that need root.
 
 ## Authentication
 
-OpenP2S uses Microsoft Entra device-code authentication. On the first
-connection it shows a URL and a code; later connections reuse the cached
-session when possible. MFA and Conditional Access apply normally.
+OpenP2S signs you in through your browser, using the authorization-code flow
+with PKCE. The first connection opens a Microsoft sign-in page; later ones
+reuse the cached session. MFA and Conditional Access apply normally.
+
+The browser has to be on the machine running OpenP2S: the sign-in completes by
+redirecting to a listener on `127.0.0.1`, which a browser elsewhere cannot
+reach. If no browser can be opened, OpenP2S says so and stops rather than
+waiting for a reply that cannot arrive.
+
+On a machine with no browser — a headless server, or SSH without forwarding —
+use the device-code flow instead:
+
+```bash
+openp2s connect azurevpnconfig.xml --auth device-code
+```
+
+That is opt-in rather than automatic. The device-code flow is susceptible to
+phishing: an attacker starts the flow and talks you into approving _their_
+sign-in. Organisations can block it for that reason, so OpenP2S will not
+quietly fall back to it — if the browser flow fails, you are told, and you
+choose.
 
 ```bash
 openp2s auth login azurevpnconfig.xml   # sign in without connecting
@@ -187,6 +204,7 @@ corresponding source for the OpenVPN it ships.
 ## Security
 
 - OpenP2S runs as your normal user and elevates only OpenVPN and DNS changes.
+- Sign-in is browser-based with PKCE by default; device code is opt-in.
 - Access tokens never appear in a command line or an environment variable.
 - Runtime files are private to your Unix user; a compatibility fallback may
   use a temporary `0600` credential file.

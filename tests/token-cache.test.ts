@@ -19,16 +19,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { FileTokenCacheStore } from '../src/auth/cache/fileStore.ts';
-import { cacheKey } from '../src/auth/cache/identity.ts';
+import {
+  cacheKey,
+  cacheKeysForIdentity,
+  legacyCacheKey,
+  type CacheIdentity,
+} from '../src/auth/cache/identity.ts';
 import { OpenP2SError } from '../src/errors.ts';
 
 let directory: string;
 let store: FileTokenCacheStore;
 
-const IDENTITY = {
+const IDENTITY: CacheIdentity = {
   authority: 'https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555',
   audience: '41b23e61-6c1e-4545-b367-cd054e0ed4b4',
   clientId: '41b23e61-6c1e-4545-b367-cd054e0ed4b4',
+  flow: 'browser',
 };
 
 beforeEach(() => {
@@ -42,7 +48,13 @@ afterEach(() => {
 
 describe('cacheKey', () => {
   it('is stable for the same identity', () => {
-    assert.equal(cacheKey(IDENTITY), cacheKey({ ...IDENTITY }));
+    assert.equal(cacheKey(IDENTITY), cacheKey({ ...IDENTITY, flow: 'browser' }));
+  });
+
+  it('does not collide with the key OpenP2S 0.1.x wrote', () => {
+    for (const flow of ['browser', 'device-code'] as const) {
+      assert.notEqual(cacheKey({ ...IDENTITY, flow }), legacyCacheKey(IDENTITY));
+    }
   });
 
   it('changes when the tenant changes', () => {
@@ -70,6 +82,7 @@ describe('cacheKey', () => {
       authority: IDENTITY.authority.toUpperCase(),
       audience: IDENTITY.audience.toUpperCase(),
       clientId: IDENTITY.clientId.toUpperCase(),
+      flow: IDENTITY.flow,
     };
     assert.equal(cacheKey(IDENTITY), cacheKey(upper));
   });
@@ -120,9 +133,27 @@ describe('FileTokenCacheStore', () => {
     );
   });
 
+  it('names every key a session could live under, including the 0.1.x one', async () => {
+    // `auth status` and `auth clear` take a profile, never a flow.
+    const refs = cacheKeysForIdentity(IDENTITY);
+
+    assert.deepEqual(
+      refs.map((ref) => ref.flow),
+      ['browser', 'device-code', undefined],
+    );
+    assert.equal(refs[0]?.key, cacheKey({ ...IDENTITY, flow: 'browser' }));
+    assert.equal(refs[1]?.key, cacheKey({ ...IDENTITY, flow: 'device-code' }));
+    assert.equal(refs[2]?.key, legacyCacheKey(IDENTITY));
+    assert.equal(new Set(refs.map((ref) => ref.key)).size, 3, 'keys must be distinct');
+  });
+
   it('lists saved keys', async () => {
     const first = cacheKey(IDENTITY);
-    const second = cacheKey({ ...IDENTITY, audience: 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8' });
+    const second = cacheKey({
+      ...IDENTITY,
+      audience: 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8',
+      flow: 'browser',
+    });
 
     await store.save(first, '{}');
     await store.save(second, '{}');

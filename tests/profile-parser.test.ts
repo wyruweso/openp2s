@@ -194,6 +194,24 @@ describe('AzureProfileParser: rejects bad input', () => {
     );
   });
 
+  it('rejects a tenant URL on a non-standard port', () => {
+    // The port is dropped when the authority is rebuilt, so accepting this
+    // would sign in somewhere other than the profile named.
+    rejects(
+      buildXml({ tenant: 'https://login.microsoftonline.com:8443/common' }),
+      /must not use a non-standard port/,
+    );
+  });
+
+  it('accepts a tenant URL that spells out :443', () => {
+    // WHATWG URL erases the default port, so this is the same URL.
+    const profile = new AzureProfileParser().parseFile(
+      'p.xml',
+      buildXml({ tenant: 'https://login.microsoftonline.com:443/common' }),
+    );
+    assert.equal(profile.auth.authority, 'https://login.microsoftonline.com/common');
+  });
+
   it('rejects an invalid DNS server address', () => {
     const xml = buildXml().replace(
       '</AzVpnProfile>',
