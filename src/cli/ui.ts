@@ -116,6 +116,25 @@ export class Ui {
   }
 
   /**
+   * The browser sign-in prompt.
+   *
+   * The authorization URL is not printed: the browser is already open, and the
+   * reply can only reach the listener on this machine, so it would be live
+   * OAuth parameters in a log for no gain.
+   *
+   * stderr, like deviceCode() below: commands with a `--json` mode promise
+   * stdout carries exactly one document, and a cold cache must not break that.
+   */
+  browserPrompt(): void {
+    const out = (text: string): void => {
+      process.stderr.write(text);
+    };
+    out('\n');
+    out(`${style.bold}Continue the sign-in in your browser.${style.reset}\n\n`);
+    out(`${style.dim}Waiting for sign-in...${style.reset}\n`);
+  }
+
+  /**
    * The device code prompt.
    *
    * Given its own block with blank lines around it because the user has to

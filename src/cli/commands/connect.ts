@@ -6,6 +6,7 @@
  * `openp2s disconnect`, via the session record in the runtime directory.
  */
 
+import type { InteractiveFlow } from '../../auth/entra.ts';
 import { OpenP2SError } from '../../errors.ts';
 import {
   PINNED_ROOT_HINT,
@@ -47,6 +48,8 @@ function reportResidue(ui: Ui): void {
 export interface ConnectOptions extends GlobalOptions {
   readonly ca?: string;
   readonly clientId?: string;
+  /** Which interactive sign-in flow to use. */
+  readonly authFlow?: InteractiveFlow;
   readonly scope?: string;
   readonly openvpnBinary?: string;
   /**
@@ -236,6 +239,7 @@ async function runConnect(
 
   const authenticator = createAuthenticator(context, profile, {
     ...(options.clientId ? { clientId: options.clientId } : {}),
+    ...(options.authFlow ? { flow: options.authFlow } : {}),
     ...(options.scope ? { scope: options.scope } : {}),
   });
 

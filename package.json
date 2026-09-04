@@ -1,6 +1,6 @@
 {
   "name": "openp2s",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Native Linux client for Azure Point-to-Site VPN with Microsoft Entra ID authentication",
   "license": "GPL-2.0-only",
   "private": true,

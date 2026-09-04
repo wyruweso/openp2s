@@ -15,6 +15,7 @@
  * `connect`: a probe's cleanup must not delete a live tunnel's socket.
  */
 
+import type { InteractiveFlow } from '../../auth/entra.ts';
 import { randomBytes } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { describeError, OpenP2SError, redact } from '../../errors.ts';
@@ -41,6 +42,8 @@ const NO_DNS: DnsConfigurator = {
 export interface ProbeOptions extends GlobalOptions {
   readonly ca?: string;
   readonly clientId?: string;
+  /** Which interactive sign-in flow to use. */
+  readonly authFlow?: InteractiveFlow;
   /** So a probe diagnoses the same auth configuration `connect` uses. */
   readonly scope?: string;
   readonly openvpnBinary?: string;
@@ -212,6 +215,7 @@ async function runProbe(
 
   const authenticator = createAuthenticator(context, profile, {
     ...(options.clientId ? { clientId: options.clientId } : {}),
+    ...(options.authFlow ? { flow: options.authFlow } : {}),
     ...(options.scope ? { scope: options.scope } : {}),
   });
 

@@ -275,3 +275,26 @@ describe('file modes', () => {
     assert.match(PROSE, /directory is mode 0700; the files in it are mode 0600/i);
   });
 });
+
+describe('the documented sign-in flows', () => {
+  it('documents the browser flow as the default', () => {
+    assert.match(MAN, /browser authorization-code flow with PKCE/i);
+  });
+
+  it('says device code is opt-in and why', () => {
+    assert.match(MAN, /opt-in/i);
+    assert.match(MAN, /phishing/i);
+  });
+
+  it('says a missing browser fails rather than waiting', () => {
+    assert.match(MAN, /fails rather\s+than waiting/i);
+  });
+
+  it('says the two flows never fall back to one another', () => {
+    assert.match(MAN, /does not fall back from one flow to the other/i);
+  });
+
+  it('says sessions are scoped to their flow', () => {
+    assert.match(MAN, /scoped to the flow/i);
+  });
+});

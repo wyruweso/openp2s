@@ -28,6 +28,33 @@ as key material.
 The token cache holds a refresh token and is the one item that survives a
 reboot. Remove it with `openp2s auth clear`.
 
+## Sign-in
+
+OpenP2S uses the browser authorization-code flow with PKCE. The authorization
+code is bound to a one-time verifier generated inside OpenP2S and is delivered
+to a listener on 127.0.0.1 that exists only for the duration of the sign-in, so
+an intercepted code cannot be redeemed without the verifier.
+
+The browser must be on this machine, and OpenP2S fails with a clear message
+when none can be opened. The sign-in ends in a redirect to 127.0.0.1, which
+resolves to whichever machine the browser is running on, so a URL opened
+elsewhere would deliver the code to that machine rather than to OpenP2S.
+
+`--auth device-code` prints a code for you to enter on another device. It is
+the only flow that works with no local browser, and it is **opt-in**: the
+device-code flow is susceptible to phishing, because an attacker can start the
+flow and persuade you to approve their sign-in. Organisations can block it by
+Conditional Access.
+
+OpenP2S never falls back from one flow to the other. A refusal you should see —
+a Conditional Access denial, or an application that does not permit the
+loopback redirect — would otherwise be hidden by a silent retry on the flow
+your organisation was trying to prevent.
+
+Sessions are cached per flow. A session obtained by device code is not reused
+for a browser sign-in, because Entra records how a session was established and
+carries that through refreshes.
+
 ## Privileges
 
 OpenP2S runs as you. Only operations that require root are elevated, through

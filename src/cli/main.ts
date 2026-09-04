@@ -9,6 +9,7 @@
  */
 
 import { Command, CommanderError } from 'commander';
+import type { InteractiveFlow } from '../auth/entra.ts';
 import { describeError, OpenP2SError } from '../errors.ts';
 import { authClearCommand, authLoginCommand, authStatusCommand } from './commands/auth.ts';
 import { connectCommand } from './commands/connect.ts';
@@ -20,7 +21,7 @@ import { probeCommand } from './commands/probe.ts';
 import { statusCommand } from './commands/status.ts';
 import { Ui } from './ui.ts';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 /** Options every command accepts. */
 interface RootOptions {
@@ -44,6 +45,15 @@ function rootOptions(command: Command): RootOptions {
  * String() on an unexpected object would silently produce "[object Object]"
  * and then fail with a confusing message.
  */
+/**
+ * Validate --auth. A typo must be an error, not a silent fall back to the
+ * default: the two flows differ in what a tenant permits.
+ */
+function parseAuthFlow(value: string): InteractiveFlow {
+  if (value === 'browser' || value === 'device-code') return value;
+  throw new OpenP2SError(`--auth must be "browser" or "device-code", got ${JSON.stringify(value)}`);
+}
+
 function parsePositiveInt(value: unknown, what: string, fallback: number): number {
   if (value === undefined) return fallback;
   if (typeof value !== 'string' && typeof value !== 'number') {
@@ -75,6 +85,10 @@ export function buildProgram(): Command {
     .argument('<profile>', 'path to azurevpnconfig.xml')
     .option('--ca <path>', 'CA certificate to validate the gateway against')
     .option('--client-id <id>', 'override the Entra application id')
+    .option(
+      '--auth <flow>',
+      'sign-in flow: browser (loopback + PKCE, default) or device-code for a headless machine',
+    )
     .option('--scope <scope>', 'override the OAuth scope')
     .option('--openvpn-binary <path>', 'override the OpenP2S OpenVPN binary')
     .option(
@@ -102,6 +116,9 @@ export function buildProgram(): Command {
         ...rootOptions(command),
         ...(typeof options['ca'] === 'string' ? { ca: options['ca'] } : {}),
         ...(typeof options['clientId'] === 'string' ? { clientId: options['clientId'] } : {}),
+        ...(typeof options['auth'] === 'string'
+          ? { authFlow: parseAuthFlow(options['auth']) }
+          : {}),
         ...(typeof options['scope'] === 'string' ? { scope: options['scope'] } : {}),
         ...(typeof options['openvpnBinary'] === 'string'
           ? { openvpnBinary: options['openvpnBinary'] }
@@ -222,6 +239,10 @@ export function buildProgram(): Command {
     )
     .option('--ca <path>', 'CA certificate to validate the gateway against')
     .option('--client-id <id>', 'override the Entra application id')
+    .option(
+      '--auth <flow>',
+      'sign-in flow: browser (loopback + PKCE, default) or device-code for a headless machine',
+    )
     .option('--scope <scope>', 'override the Entra scope')
     .option('--openvpn-binary <path>', 'override the OpenP2S OpenVPN binary')
     .option('--timeout <seconds>', 'how long to wait', '45')
@@ -233,6 +254,9 @@ export function buildProgram(): Command {
         ...(options['experimentalAzureCompat'] === true ? { azureCompat: true } : {}),
         ...(typeof options['ca'] === 'string' ? { ca: options['ca'] } : {}),
         ...(typeof options['clientId'] === 'string' ? { clientId: options['clientId'] } : {}),
+        ...(typeof options['auth'] === 'string'
+          ? { authFlow: parseAuthFlow(options['auth']) }
+          : {}),
         ...(typeof options['scope'] === 'string' ? { scope: options['scope'] } : {}),
         ...(typeof options['openvpnBinary'] === 'string'
           ? { openvpnBinary: options['openvpnBinary'] }
@@ -251,12 +275,19 @@ export function buildProgram(): Command {
     .argument('<profile>', 'path to azurevpnconfig.xml')
     .option('--force', 'ignore the cached session and sign in again')
     .option('--client-id <id>', 'override the Entra application id')
+    .option(
+      '--auth <flow>',
+      'sign-in flow: browser (loopback + PKCE, default) or device-code for a headless machine',
+    )
     .option('--scope <scope>', 'override the OAuth scope')
     .action(async (profile: string, options: Record<string, unknown>, command: Command) => {
       process.exitCode = await authLoginCommand(profile, {
         ...rootOptions(command),
         ...(options['force'] === true ? { force: true } : {}),
         ...(typeof options['clientId'] === 'string' ? { clientId: options['clientId'] } : {}),
+        ...(typeof options['auth'] === 'string'
+          ? { authFlow: parseAuthFlow(options['auth']) }
+          : {}),
         ...(typeof options['scope'] === 'string' ? { scope: options['scope'] } : {}),
       });
     });

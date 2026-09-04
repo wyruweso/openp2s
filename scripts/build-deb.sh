@@ -180,7 +180,7 @@ chmod 0644 "$STAGE/usr/share/man/man1/openp2s.1.gz"
 cat > "$STAGE/usr/share/doc/openp2s/copyright" <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: openp2s
-Source: https://github.com/openp2s/openp2s
+Source: https://github.com/wyruweso/openp2s
 
 Files: *
 Copyright: 2026 OpenP2S contributors
@@ -253,9 +253,12 @@ SHLIB="$(sed -n 's/^shlibs:Depends=//p' "$OUT/shlibdeps.txt")"
 [ -n "$SHLIB" ] || die "dpkg-shlibdeps produced no dependencies, which cannot be right"
 
 # ca-certificates is hard: there is no bundled root, so without it every
-# connection fails verification. sudo is only recommended - running as root
-# directly is a legitimate way to provide it.
-DEPENDS="$SHLIB, systemd, ca-certificates"
+# connection fails verification. sensible-utils is hard because the browser
+# sign-in invokes sensible-browser by name.
+#
+# sudo and xdg-utils are only recommended: running as root directly provides
+# the first, and a headless machine wants neither - it uses --auth device-code.
+DEPENDS="$SHLIB, systemd, ca-certificates, sensible-utils"
 
 # The build umask can leave directories 0775, which lintian flags.
 find "$STAGE" -type d -exec chmod 0755 {} +
@@ -270,10 +273,10 @@ Section: net
 Priority: optional
 Architecture: $ARCH
 Depends: $DEPENDS
-Recommends: sudo
+Recommends: sudo, xdg-utils
 Installed-Size: $INSTALLED_KB
 Maintainer: wyruweso <tseluiko.m@gmail.com>
-Homepage: https://github.com/openp2s/openp2s
+Homepage: https://github.com/wyruweso/openp2s
 Description: Azure Point-to-Site VPN client with Microsoft Entra ID auth
  OpenP2S connects to an Azure Point-to-Site VPN gateway that uses Microsoft
  Entra ID authentication, from Linux, using standard OpenVPN with the
@@ -291,8 +294,9 @@ Description: Azure Point-to-Site VPN client with Microsoft Entra ID auth
  default and reachable only from the local configuration, for gateways that
  turn out to require the Azure options string.
  .
- OpenP2S also handles the Entra device-code sign-in, token caching, and the
- systemd-resolved split DNS that Azure Private Link names require.
+ OpenP2S also handles the Entra sign-in - through the browser by default, or
+ with a device code on a machine that has none - along with token caching and
+ the systemd-resolved split DNS that Azure Private Link names require.
  .
  Built on $BUILT_ON. Library dependencies are resolved against that release;
  installing on an older distribution is not supported.

@@ -65,7 +65,7 @@ const BUILDINFO = [
 ].join('\n');
 
 const CLI_BUILDINFO = [
-  'openp2s_version=0.1.1',
+  'openp2s_version=0.1.2',
   'cli_node_version=24.13.0',
   'cli_node_sha256=' + 'b'.repeat(64),
 ].join('\n');
@@ -300,7 +300,7 @@ describe('provenance claims are checked, not assumed', () => {
   it('refuses a BUILDINFO missing a field it would print', () => {
     const p = good(workDir);
     const { code, stderr } = run(writeMetafile([[p, 10]]), {
-      cliBuildinfo: 'openp2s_version=0.1.1\ncli_node_version=24.13.0',
+      cliBuildinfo: 'openp2s_version=0.1.2\ncli_node_version=24.13.0',
     });
 
     assert.equal(code, 1);
