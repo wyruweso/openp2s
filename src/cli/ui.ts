@@ -10,6 +10,14 @@ import { redact } from '../errors.ts';
 
 const isTty = process.stdout.isTTY === true;
 
+function ttyLine(stream: NodeJS.WriteStream, text: string): string {
+  return stream.isTTY === true ? `\r${text}\r\n` : `${text}\n`;
+}
+
+function ttyNl(stream: NodeJS.WriteStream): string {
+  return stream.isTTY === true ? '\r\n' : '\n';
+}
+
 /**
  * Respect NO_COLOR and a non-tty stdout.
  *
@@ -49,39 +57,43 @@ export class Ui {
   /** Plain line to stdout. Redacted, always. */
   line(text = ''): void {
     if (this.quiet) return;
-    process.stdout.write(`${redact(text)}\n`);
+    process.stdout.write(ttyLine(process.stdout, redact(text)));
   }
 
   /** A completed step. */
   ok(text: string): void {
     if (this.quiet) return;
-    process.stdout.write(`${style.green}✓${style.reset} ${redact(text)}\n`);
+    process.stdout.write(ttyLine(process.stdout, `${style.green}✓${style.reset} ${redact(text)}`));
   }
 
   /** Something worth knowing that did not stop the operation. */
   warn(text: string): void {
-    process.stderr.write(`${style.yellow}warning:${style.reset} ${redact(text)}\n`);
+    process.stderr.write(
+      ttyLine(process.stderr, `${style.yellow}warning:${style.reset} ${redact(text)}`),
+    );
   }
 
   /** A failure. Written to stderr so it survives stdout redirection. */
   error(text: string): void {
-    process.stderr.write(`${style.red}error:${style.reset} ${redact(text)}\n`);
+    process.stderr.write(
+      ttyLine(process.stderr, `${style.red}error:${style.reset} ${redact(text)}`),
+    );
   }
 
   /** Remediation advice printed under an error. */
   hint(text: string): void {
-    process.stderr.write(`${style.dim}${redact(text)}${style.reset}\n`);
+    process.stderr.write(ttyLine(process.stderr, `${style.dim}${redact(text)}${style.reset}`));
   }
 
   /** Diagnostics, shown only with --verbose. */
   debug(text: string): void {
     if (!this.verboseMode || this.quiet) return;
-    process.stderr.write(`${style.dim}${redact(text)}${style.reset}\n`);
+    process.stderr.write(ttyLine(process.stderr, `${style.dim}${redact(text)}${style.reset}`));
   }
 
   heading(text: string): void {
     if (this.quiet) return;
-    process.stdout.write(`${style.bold}${redact(text)}${style.reset}\n`);
+    process.stdout.write(ttyLine(process.stdout, `${style.bold}${redact(text)}${style.reset}`));
   }
 
   /**
@@ -102,15 +114,19 @@ export class Ui {
 
       if (Array.isArray(value)) {
         if (value.length === 0) {
-          process.stdout.write(`${padded}${style.dim}(none)${style.reset}\n`);
+          process.stdout.write(
+            ttyLine(process.stdout, `${padded}${style.dim}(none)${style.reset}`),
+          );
           continue;
         }
-        process.stdout.write(`${padded}${redact(String(value[0]))}\n`);
+        process.stdout.write(ttyLine(process.stdout, `${padded}${redact(String(value[0]))}`));
         for (const extra of value.slice(1)) {
-          process.stdout.write(`${' '.repeat(width + 2)}${redact(String(extra))}\n`);
+          process.stdout.write(
+            ttyLine(process.stdout, `${' '.repeat(width + 2)}${redact(String(extra))}`),
+          );
         }
       } else {
-        process.stdout.write(`${padded}${redact(String(value))}\n`);
+        process.stdout.write(ttyLine(process.stdout, `${padded}${redact(String(value))}`));
       }
     }
   }
@@ -126,12 +142,13 @@ export class Ui {
    * stdout carries exactly one document, and a cold cache must not break that.
    */
   browserPrompt(): void {
+    const nl = ttyNl(process.stderr);
     const out = (text: string): void => {
       process.stderr.write(text);
     };
-    out('\n');
-    out(`${style.bold}Continue the sign-in in your browser.${style.reset}\n\n`);
-    out(`${style.dim}Waiting for sign-in...${style.reset}\n`);
+    out(nl);
+    out(`${style.bold}Continue the sign-in in your browser.${style.reset}${nl}${nl}`);
+    out(`${style.dim}Waiting for sign-in...${style.reset}${nl}`);
   }
 
   /**
@@ -145,15 +162,16 @@ export class Ui {
    * a cold token cache must not be able to break `openp2s probe --json | jq`.
    */
   deviceCode(verificationUri: string, userCode: string): void {
+    const nl = ttyNl(process.stderr);
     const out = (text: string): void => {
       process.stderr.write(text);
     };
-    out('\n');
-    out(`${style.bold}Authentication required.${style.reset}\n\n`);
-    out('Open:\n');
-    out(`  ${style.cyan}${verificationUri}${style.reset}\n\n`);
-    out('Code:\n');
-    out(`  ${style.bold}${userCode}${style.reset}\n\n`);
-    out(`${style.dim}Waiting for authentication...${style.reset}\n`);
+    out(nl);
+    out(`${style.bold}Authentication required.${style.reset}${nl}${nl}`);
+    out(`Open:${nl}`);
+    out(`  ${style.cyan}${verificationUri}${style.reset}${nl}${nl}`);
+    out(`Code:${nl}`);
+    out(`  ${style.bold}${userCode}${style.reset}${nl}${nl}`);
+    out(`${style.dim}Waiting for authentication...${style.reset}${nl}`);
   }
 }
