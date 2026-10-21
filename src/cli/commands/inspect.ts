@@ -58,6 +58,10 @@ export async function inspectCommand(
     ['Audience', summary.audience],
     ['Client ID', summary.clientId],
     ['Scope', profile.auth.scope],
+    [
+      'Group authentication',
+      profile.auth.enableGroupToken ? 'VPN + Microsoft Graph token' : 'disabled',
+    ],
     ['Server secret', summary.serverSecret],
     ['DNS servers', summary.dnsServers],
     ['DNS domains', summary.dnsSuffixes],

@@ -360,3 +360,28 @@ describe('tenant and audience URL hygiene', () => {
     assert.equal(validateAudience('api://11111111-2222-3333-4444-555555555555').kind, 'uri');
   });
 });
+
+describe('group-token profile setting', () => {
+  it('preserves true and false and rejects malformed values', () => {
+    const xml = fixture('azure-schema');
+    for (const value of ['true', '1', 'false', '0']) {
+      const profile = parser.parse(
+        xml.replace(
+          '<enablegrouptoken>false</enablegrouptoken>',
+          `<enablegrouptoken>${value}</enablegrouptoken>`,
+        ),
+      );
+      assert.equal(profile.auth.enableGroupToken, value === 'true' || value === '1');
+    }
+    assert.throws(
+      () =>
+        parser.parse(
+          xml.replace(
+            '<enablegrouptoken>false</enablegrouptoken>',
+            '<enablegrouptoken>invalid</enablegrouptoken>',
+          ),
+        ),
+      ProfileError,
+    );
+  });
+});
