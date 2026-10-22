@@ -33,6 +33,7 @@ import {
   type MsalClient,
 } from '../src/auth/entra.ts';
 import { AuthError } from '../src/errors.ts';
+import { GRAPH_SCOPE, groupCredential } from '../src/auth/groupToken.ts';
 import type { EntraAuthConfig } from '../src/profile/types.ts';
 import { syntheticLongJwt } from './helpers/syntheticToken.ts';
 
@@ -71,6 +72,7 @@ class FakeMsal implements MsalClient {
 
   accounts: AccountInfo[] = [];
   silent: AuthenticationResult | Error | null = null;
+  group: AuthenticationResult | Error | null = null;
   deviceCode: AuthenticationResult | Error | null = null;
   /** What MSAL hands the device-code callback. */
   deviceCodeResponse: {
@@ -94,6 +96,10 @@ class FakeMsal implements MsalClient {
     scopes: string[];
   }): Promise<AuthenticationResult | null> {
     this.silentRequests.push(request);
+    if (request.scopes[0] === GRAPH_SCOPE) {
+      if (this.group instanceof Error) throw this.group;
+      return this.group;
+    }
     if (this.silent instanceof Error) throw this.silent;
     return this.silent;
   }
@@ -726,5 +732,115 @@ describe('flow-specific failure hints', () => {
       const hint = explainAuthFailure(new Error('AADSTS53003: conditional access'), flow);
       assert.match(hint ?? '', /Conditional Access/i);
     }
+  });
+});
+
+describe('group-aware authentication', () => {
+  it('acquires Graph for the same account and uses the earlier expiry', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    const expiry = new Date('2029-12-31T23:00:00Z');
+    msal.group = authResult({ accessToken: 'graph-token', expiresOn: expiry });
+    const result = await authenticator({ ...AUTH, enableGroupToken: true }).acquireToken();
+    assert.equal(result.accessToken, groupCredential(TOKEN, 'graph-token'));
+    assert.equal(result.expiresOn?.getTime(), expiry.getTime());
+    assert.deepEqual(
+      msal.silentRequests.map((r) => r.scopes),
+      [[AUTH.scope], [GRAPH_SCOPE]],
+    );
+    assert.equal(msal.silentRequests[1]?.account, ACCOUNT);
+  });
+
+  it('leaves profiles without group authentication on the single-token path', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    assert.equal((await authenticator().acquireToken()).accessToken, TOKEN);
+    assert.equal(msal.silentRequests.length, 1);
+  });
+
+  it('does not try another identity or sign-in when Graph acquisition fails', async () => {
+    msal.accounts = [ACCOUNT, { ...ACCOUNT, homeAccountId: 'another-user' }];
+    msal.silent = authResult();
+    msal.group = new Error('consent required');
+    await assert.rejects(
+      authenticator({ ...AUTH, enableGroupToken: true }).acquireToken(),
+      /group token/,
+    );
+    assert.equal(msal.deviceCodeRequests.length, 0);
+    assert.equal(msal.interactiveRequests.length, 0);
+    assert.deepEqual(
+      msal.silentRequests.map((r) => r.scopes),
+      [[AUTH.scope], [GRAPH_SCOPE]],
+    );
+  });
+
+  it('rejects a missing or mismatched Graph identity', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    for (const group of [
+      null,
+      authResult({ accessToken: '' }),
+      authResult({ account: null }),
+      authResult({ account: { ...ACCOUNT, homeAccountId: 'another-user' } }),
+      authResult({ tenantId: 'another-tenant' }),
+    ]) {
+      msal.group = group;
+      await assert.rejects(
+        authenticator({ ...AUTH, enableGroupToken: true }).acquireToken(),
+        /VPN account and tenant/,
+      );
+    }
+  });
+
+  it('rejects an unbound VPN identity before requesting Graph', async () => {
+    msal.accounts = [ACCOUNT];
+    for (const result of [
+      authResult({ account: null }),
+      authResult({ tenantId: 'another-tenant' }),
+    ]) {
+      msal.silent = result;
+      await assert.rejects(
+        authenticator({ ...AUTH, enableGroupToken: true }).acquireToken(),
+        /cannot bind the group token/,
+      );
+    }
+    assert.ok(msal.silentRequests.every((r) => r.scopes[0] === AUTH.scope));
+  });
+
+  it('rejects other clouds before requesting a Public-cloud Graph token', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    await assert.rejects(
+      authenticator({
+        ...AUTH,
+        authority: `https://login.microsoftonline.us/${AUTH.tenantId}`,
+        enableGroupToken: true,
+      }).acquireToken(),
+      /Azure Public only/,
+    );
+    assert.equal(msal.silentRequests.length, 1);
+  });
+
+  it('does not claim an expiry when either token expiry is unknown', async () => {
+    msal.accounts = [ACCOUNT];
+    for (const missing of ['vpn', 'graph']) {
+      msal.silent = authResult(missing === 'vpn' ? { expiresOn: null } : {});
+      msal.group = authResult(missing === 'graph' ? { expiresOn: null } : {});
+      const result = await authenticator({ ...AUTH, enableGroupToken: true }).acquireToken();
+      assert.equal(result.expiresOn, undefined);
+    }
+  });
+
+  it('also requests the group token after an interactive VPN login', async () => {
+    msal.interactive = authResult();
+    msal.group = authResult({ accessToken: 'graph-token' });
+    const result = await authenticator(
+      { ...AUTH, enableGroupToken: true },
+      msal,
+      'browser',
+    ).acquireToken(true);
+    assert.equal(result.accessToken, groupCredential(TOKEN, 'graph-token'));
+    assert.equal(msal.interactiveRequests.length, 1);
+    assert.deepEqual(msal.silentRequests[0]?.scopes, [GRAPH_SCOPE]);
   });
 });
