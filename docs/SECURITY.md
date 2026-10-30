@@ -28,6 +28,12 @@ as key material.
 The token cache holds a refresh token and is the one item that survives a
 reboot. Remove it with `openp2s auth clear`.
 
+When the profile enables group authentication, the same protections apply to
+both the VPN access token and the Microsoft Graph access token. MSAL caches
+them in the existing private cache; their combined TLV credential is assembled
+in memory and sent only to the VPN gateway. Graph acquisition is bound to the
+same account and tenant. A missing or mismatched token fails the connection.
+
 ## Sign-in
 
 OpenP2S uses the browser authorization-code flow with PKCE. The authorization

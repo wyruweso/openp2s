@@ -201,6 +201,20 @@ fault rather than a client one.
 Each release publishes `BUILDINFO`, `SHA256SUMS`, and the complete
 corresponding source for the OpenVPN it ships.
 
+## Group-based VPN address pools
+
+Profiles with `<enablegrouptoken>true</enablegrouptoken>` obtain a Microsoft
+Graph token using the same application, account and tenant as the VPN token.
+Both tokens are sent to the VPN gateway in its `TlvToken` credential format.
+The gateway resolves group membership and assigns the address pool.
+
+Group authentication supports Azure Public. The application
+must already have the necessary Graph consent: a failed Graph-token request
+stops the connection instead of falling back to a different address pool.
+The combined credential needs the included OpenVPN build with its 8192-byte
+credential limit. Existing profiles without the flag keep their single-token
+behaviour. See [protocol notes](docs/group-token.md).
+
 ## Security
 
 - OpenP2S runs as your normal user and elevates only OpenVPN and DNS changes.

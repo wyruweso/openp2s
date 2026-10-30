@@ -317,6 +317,11 @@ export class AzureProfileParser {
     const tenant = validateTenantUrl(tenantText);
     const audience = validateAudience(audienceText);
     const issuer = text(child(aad, 'issuer'));
+    const groupTokenText = text(child(aad, 'enablegrouptoken'));
+    const enableGroupToken = parseBoolean(groupTokenText);
+    if (groupTokenText !== undefined && enableGroupToken === undefined) {
+      throw new ProfileError('<enablegrouptoken> must be true, false, 1 or 0');
+    }
 
     const explicitClientId = text(child(aad, 'clientid')) ?? text(child(root, 'clientid'));
     const clientId = explicitClientId ?? audience.clientId;
@@ -371,6 +376,7 @@ export class AzureProfileParser {
         audience: audience.value,
         scope: audience.scope,
         clientId,
+        ...(enableGroupToken !== undefined ? { enableGroupToken } : {}),
         ...(issuer ? { issuer } : {}),
       },
       serverSecret,

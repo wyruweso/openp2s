@@ -29,6 +29,7 @@ import {
   type TokenCacheContext,
 } from '@azure/msal-node';
 import { AuthError, describeError } from '../errors.ts';
+import { GRAPH_SCOPE, groupCredential } from './groupToken.ts';
 import type { EntraAuthConfig } from '../profile/types.ts';
 import {
   cacheKey,
@@ -48,7 +49,8 @@ export interface DeviceCodePrompt {
 
 export interface AuthOutcome {
   /**
-   * The Entra access token.
+   * The gateway credential: an Entra access token, or the two-token TLV
+   * envelope when the profile requires group-aware authentication.
    */
   readonly accessToken: string;
   readonly expiresOn: Date | undefined;
@@ -384,9 +386,10 @@ export class EntraAuthenticator implements TokenSource {
   /**
    * Attempt silent acquisition.
    *
-   * Returns undefined rather than throwing on any failure. A stale cache,
+   * Returns undefined when the VPN token cannot be acquired. A stale cache,
    * a revoked session and a Conditional Access policy change all look the
    * same from here, and all have the same remedy: sign in again.
+   * Group-token failures propagate once a VPN identity has been selected.
    */
   private async trySilent(): Promise<AuthOutcome | undefined> {
     let accounts: AccountInfo[];
@@ -397,17 +400,18 @@ export class EntraAuthenticator implements TokenSource {
     }
 
     for (const account of accounts) {
+      let result: AuthenticationResult | null;
       try {
-        const result = await this.getClient().acquireTokenSilent({
+        result = await this.getClient().acquireTokenSilent({
           account,
           scopes: this.scopes,
         });
-        if (result?.accessToken) {
-          return this.toOutcome(result, true);
-        }
       } catch (error) {
         this.options.onDebug?.(`silent acquisition failed: ${describeError(error)}`);
+        continue;
       }
+      // Group failures must not fall through to another account or sign-in.
+      if (result?.accessToken) return this.toOutcome(result, true);
     }
     return undefined;
   }
@@ -466,14 +470,57 @@ export class EntraAuthenticator implements TokenSource {
     return this.toOutcome(result, false);
   }
 
-  private toOutcome(result: AuthenticationResult, fromCache: boolean): AuthOutcome {
+  private async toOutcome(result: AuthenticationResult, fromCache: boolean): Promise<AuthOutcome> {
+    let accessToken = result.accessToken;
+    let expiresOn = result.expiresOn ?? undefined;
+    if (this.auth.enableGroupToken) {
+      const group = await this.acquireGroupToken(result);
+      accessToken = groupCredential(result.accessToken, group.accessToken);
+      expiresOn =
+        expiresOn && group.expiresOn
+          ? new Date(Math.min(expiresOn.getTime(), group.expiresOn.getTime()))
+          : undefined;
+    }
     return {
-      accessToken: result.accessToken,
-      expiresOn: result.expiresOn ?? undefined,
+      accessToken,
+      expiresOn,
       account: result.account?.username,
       tenantId: result.tenantId,
       fromCache,
     };
+  }
+
+  private async acquireGroupToken(result: AuthenticationResult): Promise<AuthenticationResult> {
+    // Do not send Public-cloud Graph credentials to another cloud.
+    if (new URL(this.auth.authority).hostname !== 'login.microsoftonline.com') {
+      throw new AuthError('group-token authentication currently supports Azure Public only');
+    }
+    if (!result.account || result.tenantId !== this.auth.tenantId) {
+      throw new AuthError('cannot bind the group token to the VPN account and tenant');
+    }
+    let group: AuthenticationResult | null;
+    try {
+      group = await this.getClient().acquireTokenSilent({
+        account: result.account,
+        scopes: [GRAPH_SCOPE],
+      });
+    } catch (error) {
+      // Never fall back to a VPN-only token: it can connect successfully
+      // while silently placing the user in the gateway's default pool.
+      throw new AuthError('could not acquire the Microsoft Graph group token', {
+        cause: error,
+        hint: 'The profile requires group authentication. The same VPN application and account must be allowed to obtain a Microsoft Graph token.',
+      });
+    }
+    if (
+      !group?.account ||
+      !group.accessToken ||
+      group.account.homeAccountId !== result.account.homeAccountId ||
+      group.tenantId !== result.tenantId
+    ) {
+      throw new AuthError('Microsoft Graph did not return a token for the VPN account and tenant');
+    }
+    return group;
   }
 
   /** Forget the cached session for this tenant/audience/client/flow. */
