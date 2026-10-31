@@ -279,6 +279,7 @@ async function runConnect(
           );
         }
       },
+      onReconnected: () => ui.ok('VPN reconnected'),
       onDnsConfigured: () =>
         ui.ok(options.dnsAll ? 'Configured VPN-wide DNS (~.)' : 'Configured split DNS'),
       onWarning: (message) => ui.warn(message),

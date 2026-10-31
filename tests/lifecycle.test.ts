@@ -712,3 +712,74 @@ describe('lifecycle: session record', () => {
     await connection.disconnect();
   });
 });
+
+describe('a tunnel that drops and comes back', () => {
+  const RECONNECT_LOG = [
+    'SIGUSR1[soft,connection-reset] received, process restarting',
+    'TUN/TAP device tun1 opened',
+    'net_addr_v4_add: 172.16.0.9/24 dev tun1',
+    'Initialization Sequence Completed',
+  ];
+
+  /** The reconnect work is event-driven, so wait for what it leaves behind. */
+  async function until(predicate: () => boolean): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, 'timed out waiting for the reconnect to be handled');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  it('reapplies DNS to the new interface and updates the session record', async () => {
+    const { connection, dns, spawner, warnings } = build();
+    await connection.connect();
+    assert.deepEqual(
+      dns.configured.map((entry) => entry.iface),
+      ['tun0'],
+    );
+
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => dns.configured.length === 2);
+    assert.equal(dns.configured[1]?.iface, 'tun1');
+    assert.ok(warnings.some((warning) => /tunnel dropped/.test(warning)));
+
+    const store = new SessionStore(paths.sessionFile);
+    let record = await store.read();
+    await until(() => {
+      void store.read().then((current) => {
+        record = current;
+      });
+      return record?.interfaceName === 'tun1';
+    });
+    assert.equal(record?.assignedAddress, '172.16.0.9');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun1']);
+  });
+
+  it('warns loudly when DNS cannot be restored, and keeps the tunnel', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    assert.equal(spawner.process.signals.length, 0);
+    await connection.disconnect();
+  });
+
+  it('stays quiet about restarts before the first connection', async () => {
+    const spawner = new FakeSpawner({
+      script: [
+        'SIGUSR1[soft,connection-reset] received, process restarting',
+        ...SUCCESSFUL_CONNECT_LOG,
+      ],
+    });
+    const { connection, warnings } = build({ spawner });
+    await connection.connect();
+    assert.equal(warnings.filter((warning) => /tunnel dropped/.test(warning)).length, 0);
+    await connection.disconnect();
+  });
+});

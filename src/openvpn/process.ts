@@ -131,6 +131,8 @@ const PATTERNS = {
   tlsStart: /TLS: Initial packet from|TLS: soft reset|VERIFY OK/,
   /** "VERIFY OK: depth=0, CN=..." - the leaf certificate verified. */
   certOk: /VERIFY OK: depth=0/,
+  /** Any soft restart: the tunnel has gone and OpenVPN is reconnecting. */
+  restarting: /SIGUSR1\[[^\]]*\] received, process restarting/,
   /** key-method-2 accepted; the gateway took our credentials. */
   authOk: /Peer Connection Initiated|SENT CONTROL|PUSH: Received control message/,
   /** "TUN/TAP device tun0 opened" */
@@ -164,6 +166,10 @@ export interface OpenVpnProcessOptions {
 
 export interface OpenVpnEvents {
   connected: [TunnelDetails];
+  /** The tunnel dropped and OpenVPN is reconnecting. */
+  restarting: [];
+  /** The tunnel is back. The interface and address may have changed. */
+  reconnected: [TunnelDetails];
   exit: [{ code: number | null; signal: string | null }];
   line: [string];
   stage: [ConnectionStage];
@@ -451,6 +457,10 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
       this.details.failureReason ??= 'could not open the tun device (needs root)';
     }
 
+    if (this.connected && PATTERNS.restarting.test(line)) {
+      this.emit('restarting');
+    }
+
     const device = PATTERNS.device.exec(line);
     if (device?.[1]) {
       this.details.interfaceName = device[1];
@@ -465,10 +475,14 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
       }
     }
 
-    if (!this.connected && PATTERNS.completed.test(line)) {
-      this.connected = true;
-      this.reachStage('complete');
-      this.emit('connected', this.details);
+    if (PATTERNS.completed.test(line)) {
+      if (this.connected) {
+        this.emit('reconnected', this.details);
+      } else {
+        this.connected = true;
+        this.reachStage('complete');
+        this.emit('connected', this.details);
+      }
     }
   }
 
