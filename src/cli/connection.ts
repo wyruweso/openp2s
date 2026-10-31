@@ -253,7 +253,7 @@ export class Connection {
     // No environment is passed at all any more: every Azure-specific setting
     // is a directive inside the config file, which sidesteps sudo's
     // env_reset policy entirely.
-    const plan = this.options.elevator.plan(binary.path, ['--config', paths.configFile]);
+    const plan = this.options.elevator.planNetworkOnly(binary.path, ['--config', paths.configFile]);
 
     const tunnel = new OpenVpnProcess({
       command: plan.command,

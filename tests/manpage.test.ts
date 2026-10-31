@@ -279,6 +279,33 @@ describe('privileges', () => {
     assert.ok(resolved?.endsWith('/sh'));
   });
 
+  it('runs OpenVPN as the user with only CAP_NET_ADMIN', () => {
+    const elevator = new Elevator({ euid: 1000, uid: 1000, gid: 1001, path: '/usr/bin:/bin' });
+    const plan = elevator.planNetworkOnly('/opt/openvpn', ['--config', '/run/x']);
+
+    assert.equal(plan.command, 'sudo');
+    assert.equal(plan.args[0], '--');
+    assert.ok(plan.args[1]?.endsWith('/setpriv'));
+    assert.deepEqual(plan.args.slice(2), [
+      '--reuid=1000',
+      '--regid=1001',
+      '--clear-groups',
+      '--inh-caps=-all,+net_admin',
+      '--ambient-caps=-all,+net_admin',
+      '--bounding-set=-all,+net_admin',
+      '--no-new-privs',
+      '--',
+      '/opt/openvpn',
+      '--config',
+      '/run/x',
+    ]);
+  });
+
+  it('does not escalate a network-only command when elevation is disabled', () => {
+    const plan = new Elevator({ euid: 1000, disabled: true }).planNetworkOnly('/opt/openvpn', []);
+    assert.deepEqual(plan, { command: '/opt/openvpn', args: [], elevated: false });
+  });
+
   it('refuses a relative path rather than letting sudo resolve it', () => {
     // What sudo finds on its own PATH is not necessarily what this process
     // would have found, so an unresolvable command must fail here.

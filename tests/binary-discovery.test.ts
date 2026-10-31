@@ -61,7 +61,7 @@ describe('sibling discovery', () => {
     const openvpn = plantBundle(bundle, 'openvpn-openp2s');
     const cli = plantBundle(bundle, 'openp2s');
 
-    const found = locateOpenVpnBinary({ execPath: cli, env: {} });
+    const found = locateOpenVpnBinary({ execPath: cli });
     assert.equal(found.path, openvpn);
   });
 
@@ -73,7 +73,6 @@ describe('sibling discovery', () => {
     const found = locateOpenVpnBinary({
       repoRoot,
       execPath: join(workDir, 'nowhere', 'node'),
-      env: {},
     });
     assert.equal(found.path, openvpn);
   });
@@ -88,21 +87,23 @@ describe('discovery precedence', () => {
     const found = locateOpenVpnBinary({
       override,
       execPath: join(bundle, 'openp2s'),
-      env: {},
     });
     assert.equal(found.path, override);
   });
 
-  it('prefers the environment override to a sibling', () => {
+  it('ignores an environment override, since this binary gets elevated', () => {
     const bundle = join(workDir, 'bundle');
-    plantBundle(bundle, 'openvpn-openp2s');
+    const sibling = plantBundle(bundle, 'openvpn-openp2s');
     const fromEnv = plantBundle(join(workDir, 'env'), 'openvpn');
-
-    const found = locateOpenVpnBinary({
-      execPath: join(bundle, 'openp2s'),
-      env: { OPENP2S_OPENVPN_BINARY: fromEnv },
-    });
-    assert.equal(found.path, fromEnv);
+    const saved = process.env['OPENP2S_OPENVPN_BINARY'];
+    process.env['OPENP2S_OPENVPN_BINARY'] = fromEnv;
+    try {
+      const found = locateOpenVpnBinary({ execPath: join(bundle, 'openp2s') });
+      assert.equal(found.path, sibling);
+    } finally {
+      if (saved === undefined) delete process.env['OPENP2S_OPENVPN_BINARY'];
+      else process.env['OPENP2S_OPENVPN_BINARY'] = saved;
+    }
   });
 
   it('prefers a source checkout to a sibling', () => {
@@ -114,7 +115,6 @@ describe('discovery precedence', () => {
     const found = locateOpenVpnBinary({
       repoRoot,
       execPath: join(bundle, 'openp2s'),
-      env: {},
     });
     assert.equal(found.path, built);
   });
@@ -138,7 +138,6 @@ describe('what discovery must never do', () => {
     const searched = openVpnCandidates({
       repoRoot: join(workDir, 'repo'),
       execPath: join(workDir, 'bin', 'openp2s'),
-      env: {},
     });
     for (const candidate of searched) {
       assert.ok(
@@ -161,7 +160,6 @@ describe('what discovery must never do', () => {
         locateOpenVpnBinary({
           repoRoot: join(workDir, 'repo'),
           execPath: join(workDir, 'bin', 'openp2s'),
-          env: { OPENP2S_OPENVPN_BINARY: join(workDir, 'nope') },
           installedPaths: [join(workDir, 'not-installed', 'openvpn')],
         }),
       (error: unknown) => {
@@ -179,7 +177,6 @@ describe('what discovery must never do', () => {
     try {
       locateOpenVpnBinary({
         execPath: join(workDir, 'bin', 'openp2s'),
-        env: {},
         installedPaths: [installed],
       });
       assert.fail('expected a refusal');
@@ -187,7 +184,7 @@ describe('what discovery must never do', () => {
       assert.ok(error instanceof OpenP2SError);
       assert.ok(error.hint?.includes(installed), 'the hint must name the paths it tried');
       assert.ok(error.hint?.includes(join(workDir, 'bin', 'openvpn-openp2s')), 'sibling too');
-      assert.match(error.hint ?? '', /build-openvpn\.sh|OPENP2S_OPENVPN_BINARY/);
+      assert.match(error.hint ?? '', /build-openvpn\.sh|--openvpn-binary/);
     }
   });
 });
@@ -200,7 +197,7 @@ describe('an install rooted anywhere', () => {
     const cli = plantBundle(join(prefix, 'bin'), 'openp2s');
     const openvpn = plantBundle(join(prefix, 'lib', 'openp2s'), 'openvpn');
 
-    const found = locateOpenVpnBinary({ execPath: cli, env: {} });
+    const found = locateOpenVpnBinary({ execPath: cli });
     assert.equal(found.path, openvpn);
   });
 });
@@ -211,7 +208,7 @@ describe('provenance that does not describe this binary', () => {
     const openvpn = plantBundle(dir, 'openvpn');
     plantBuildInfo(dir, openvpn, { matching: true });
 
-    const found = locateOpenVpnBinary({ override: openvpn, env: {} });
+    const found = locateOpenVpnBinary({ override: openvpn });
     assert.equal(found.provenanceKnown, true);
     assert.equal(found.userPassLen, 4096);
     assert.equal(found.patchStack, 'long-credentials experimental-azure-compat');
@@ -224,7 +221,7 @@ describe('provenance that does not describe this binary', () => {
     const openvpn = plantBundle(dir, 'openvpn');
     plantBuildInfo(dir, openvpn, { matching: false });
 
-    const found = locateOpenVpnBinary({ override: openvpn, env: {} });
+    const found = locateOpenVpnBinary({ override: openvpn });
     assert.equal(found.provenanceKnown, false);
     assert.equal(found.userPassLen, 128, 'must not inherit 4096 from an unverified record');
     assert.equal(found.patchStack, undefined);
@@ -241,7 +238,7 @@ describe('provenance that does not describe this binary', () => {
     const openvpn = plantBundle(dir, 'openvpn');
     plantBuildInfo(dir, openvpn, { matching: false });
 
-    const found = locateOpenVpnBinary({ override: openvpn, env: {} });
+    const found = locateOpenVpnBinary({ override: openvpn });
     assert.equal(found.binarySha256, 'f'.repeat(64));
   });
 });
