@@ -15,7 +15,7 @@
  *     <servervalidation><serversecret>         tls-auth key
  *                       <Cert><hash>           certificate thumbprint
  *                       <usepinnedroot>
- *     <clientconfig><dnsservers><dnsserver>
+ *     <clientconfig><dnsservers><dnsserver>    or <DnsServerEntry><dnsserver>
  *                   <dnssuffixes><dnssuffix>
  *                   <includeroutes>
  *     <protocolconfig><sslprotocolConfig><transportprotocol>
@@ -217,8 +217,16 @@ function parseDnsServers(clientConfig: XmlNode | undefined): string[] {
   const container = childNode(clientConfig, 'dnsservers');
   if (!container) return [];
 
+  // Some real profiles wrap each server in <DnsServerEntry>. Missing those means
+  // no VPN DNS and no error, so private names just quietly stop resolving.
+  const entries = toArray(child(container, 'dnsserver'));
+  for (const wrapper of toArray(child(container, 'DnsServerEntry'))) {
+    if (typeof wrapper !== 'object' || wrapper === null) continue;
+    entries.push(...toArray(child(wrapper as XmlNode, 'dnsserver')));
+  }
+
   const servers: string[] = [];
-  for (const entry of toArray(child(container, 'dnsserver'))) {
+  for (const entry of entries) {
     const value = text(entry);
     if (!value) continue;
     const address = validateIpAddress(value, 'dnsserver');
