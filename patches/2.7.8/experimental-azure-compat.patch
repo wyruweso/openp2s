@@ -1,0 +1,219 @@
+diff -ruN a/src/openvpn/init.c b/src/openvpn/init.c
+--- a/src/openvpn/init.c	2026-08-03 16:42:49.000000000 +0300
++++ b/src/openvpn/init.c	2026-08-28 14:07:54.170008931 +0300
+@@ -3302,6 +3302,9 @@
+     to.single_session = options->single_session;
+     to.mode = options->mode;
+     to.pull = options->pull;
++    /* OpenP2S: Azure compatibility travels with the TLS session like any other
++     * option, rather than being read from the environment at the point of use. */
++    to.azure_compat = options->azure_compat;
+     if (options->push_peer_info) /* all there is */
+     {
+         to.push_peer_info_detail = 3;
+diff -ruN a/src/openvpn/options.c b/src/openvpn/options.c
+--- a/src/openvpn/options.c	2026-08-03 16:42:49.000000000 +0300
++++ b/src/openvpn/options.c	2026-08-28 14:07:54.170572716 +0300
+@@ -190,6 +190,14 @@
+     " or --socks-proxy"
+     " is used).\n"
+     "--nobind        : Do not bind to local address and port.\n"
++    "--experimental-azure-compat : Enable Azure Point-to-Site compatibility\n"
++    "                  (OpenP2S). Sends the OCC options string and peer-info the\n"
++    "                  Microsoft Azure VPN client sends. EXPERIMENTAL: measurement\n"
++    "                  against a live gateway showed it is not needed, and it is\n"
++    "                  off by default. Use only against an Azure P2S gateway: it\n"
++    "                  makes this client misreport itself to any other server.\n"
++    "                  Requires --proto tcp-client, --dev tun,\n"
++    "                  --cipher AES-256-GCM, --tls-auth and --key-direction 1.\n"
+     "--dev tunX|tapX : tun/tap device (X can be omitted for dynamic device).\n"
+     "                  Defaults to \"tun\" if neither --dev nor --dev-type is given.\n"
+     "--dev-type dt   : Which device type are we using? (dt = tun or tap) Use\n"
+@@ -3303,9 +3311,69 @@
+ #endif
+ }
+ 
++/*
++ * OpenP2S: check that the effective configuration really matches what the
++ * Azure OCC options string advertises.
++ *
++ * The hardcoded OCC string claims TCPv4_CLIENT, dev-type tun, AES-256-GCM,
++ * tls-auth and keydir 1. Sending it while actually running with different
++ * settings would mean lying to the peer about the connection parameters. That
++ * is both dishonest and a source of failures that are miserable to debug: the
++ * gateway would accept the handshake and the data channel would then not work.
++ * Refuse to start instead.
++ *
++ * Note on key direction: --key-direction 1 parses to KEY_DIRECTION_INVERSE,
++ * not KEY_DIRECTION_NORMAL. The config file number and the enum name do not
++ * line up, and getting this backwards rejects every valid Azure profile.
++ */
++static void
++options_postprocess_verify_azure_compat(const struct options *o)
++{
++    const int dev = dev_type_enum(o->dev, o->dev_type);
++    /* tls-auth may be set globally or inside a <connection> block. */
++    const bool has_tls_auth = (o->tls_auth_file != NULL) || (o->ce.tls_auth_file != NULL);
++    const int key_direction =
++        (o->ce.tls_auth_file != NULL) ? o->ce.key_direction : o->key_direction;
++
++    if (!o->tls_client)
++    {
++        msg(M_USAGE, "--experimental-azure-compat requires --client (or --tls-client)");
++    }
++    if (o->ce.proto != PROTO_TCP_CLIENT)
++    {
++        msg(M_USAGE, "--experimental-azure-compat requires --proto tcp-client: the Azure OCC "
++                     "options string advertises TCPv4_CLIENT");
++    }
++    if (dev != DEV_TYPE_TUN)
++    {
++        msg(M_USAGE, "--experimental-azure-compat requires --dev tun: the Azure OCC options "
++                     "string advertises dev-type tun");
++    }
++    if (!o->ciphername || !streq(o->ciphername, "AES-256-GCM"))
++    {
++        msg(M_USAGE, "--experimental-azure-compat requires --cipher AES-256-GCM: the Azure OCC "
++                     "options string advertises cipher AES-256-GCM");
++    }
++    if (!has_tls_auth)
++    {
++        msg(M_USAGE, "--experimental-azure-compat requires --tls-auth: the Azure OCC options "
++                     "string advertises tls-auth");
++    }
++    if (key_direction != KEY_DIRECTION_INVERSE)
++    {
++        msg(M_USAGE, "--experimental-azure-compat requires --key-direction 1: the Azure OCC "
++                     "options string advertises keydir 1");
++    }
++}
++
+ static void
+ options_postprocess_verify(const struct options *o)
+ {
++    if (o->azure_compat)
++    {
++        options_postprocess_verify_azure_compat(o);
++    }
++
+     if (o->connection_list)
+     {
+         int i;
+@@ -4576,6 +4644,35 @@
+ #undef TLS_CLIENT
+ #undef TLS_SERVER
+ 
++    /* OpenP2S: Azure Point-to-Site OCC options string (--experimental-azure-compat).
++     *
++     * Some Azure Entra gateways appear to compare the client's OCC options
++     * string against what the Microsoft Azure VPN client sends, rather than
++     * against a string they derive themselves. The link-mtu/tun-mtu pair in it
++     * (1500/1551) is not something OpenVPN would compute, so the whole locally
++     * generated string is replaced rather than adjusted.
++     *
++     * Only the local (sent) string is overridden. `remote` is the string we
++     * expect to receive *from* the peer and is left exactly as upstream
++     * computed it, so OCC mismatch detection against the server still works.
++     *
++     * options_postprocess_verify_azure_compat() has established that the
++     * transport-visible parts - TCP client, tun, AES-256-GCM, tls-auth,
++     * keydir 1 - really are what this string advertises. The MTU fields are
++     * deliberately NOT checked and do not describe this connection: they are
++     * copied so the string matches what the gateway expects to see. That is
++     * why the option is gated and named experimental.
++     *
++     * The exact string comes from the reverse engineering documented by the
++     * cveld/azure-vpn-client-headless-container project. */
++    if (o->azure_compat && !remote)
++    {
++        buf_clear(&out);
++        buf_printf(&out,
++                   "V4,dev-type tun,link-mtu 1500,tun-mtu 1551,proto TCPv4_CLIENT,keydir 1,cipher "
++                   "AES-256-GCM,auth [null-digest],keysize 256,tls-auth,key-method 2,tls-client");
++    }
++
+     return BSTR(&out);
+ }
+ 
+@@ -6618,6 +6713,13 @@
+         VERIFY_PERMISSION(OPT_P_GENERAL | OPT_P_CONNECTION);
+         options->ce.bind_local = false;
+     }
++    /* OpenP2S: Azure Point-to-Site compatibility mode. OPT_P_GENERAL only, so
++     * a server can never switch it on through a pushed option. */
++    else if (streq(p[0], "experimental-azure-compat") && !p[1])
++    {
++        VERIFY_PERMISSION(OPT_P_GENERAL);
++        options->azure_compat = true;
++    }
+     else if (streq(p[0], "fast-io") && !p[1])
+     {
+         VERIFY_PERMISSION(OPT_P_GENERAL);
+diff -ruN a/src/openvpn/options.h b/src/openvpn/options.h
+--- a/src/openvpn/options.h	2026-08-03 16:42:49.000000000 +0300
++++ b/src/openvpn/options.h	2026-08-28 14:07:54.171008933 +0300
+@@ -593,6 +593,15 @@
+     /* TLS (control channel) parms */
+     bool tls_server;
+     bool tls_client;
++
++    /* OpenP2S: Azure Point-to-Site compatibility mode (--experimental-azure-compat).
++     *
++     * False by default, which leaves every Azure-specific behaviour in this
++     * build inert: the client then behaves exactly like upstream OpenVPN.
++     * When true the client sends the OCC options string and the peer-info that
++     * the Microsoft Azure VPN client sends, and the transport-visible parts of
++     * the configuration are validated against what that string advertises. */
++    bool azure_compat;
+     const char *ca_file;
+     bool ca_file_inline;
+     const char *ca_path;
+diff -ruN a/src/openvpn/ssl.c b/src/openvpn/ssl.c
+--- a/src/openvpn/ssl.c	2026-08-03 16:42:49.000000000 +0300
++++ b/src/openvpn/ssl.c	2026-08-28 14:07:54.171206941 +0300
+@@ -1880,6 +1880,30 @@
+     bool ret = false;
+     struct buffer out = alloc_buf_gc(512 * 3, &gc);
+ 
++    /* OpenP2S: Azure Point-to-Site peer-info (--experimental-azure-compat).
++     *
++     * The Azure Entra gateway resets clients advertising anything other than
++     * the peer-info the Microsoft Azure VPN client sends, so emit that
++     * single space-separated line and skip every stock IV_ variable.
++     *
++     * Gated strictly on azure_compat and on nothing else. Without the option
++     * this build advertises normal upstream peer-info to every server it talks
++     * to, which is the entire point of the gate: a patched binary must not
++     * misrepresent itself to unrelated OpenVPN servers.
++     *
++     * These exact values come from the reverse engineering documented by the
++     * cveld/azure-vpn-client-headless-container project. */
++    if (session->opt->azure_compat)
++    {
++        buf_printf(&out, "IV_VER=AzMac IV_PLAT=0.1 IV_PROTO=1 IV_PLAT_VER= IV_PLAT_DEVICE_ID=x64");
++        if (write_string(buf, BSTR(&out), -1))
++        {
++            ret = true;
++        }
++        gc_free(&gc);
++        return ret;
++    }
++
+     if (session->opt->push_peer_info_detail > 1)
+     {
+         /* push version */
+diff -ruN a/src/openvpn/ssl_common.h b/src/openvpn/ssl_common.h
+--- a/src/openvpn/ssl_common.h	2026-08-03 16:42:49.000000000 +0300
++++ b/src/openvpn/ssl_common.h	2026-08-28 14:07:54.171416300 +0300
+@@ -338,6 +338,11 @@
+      *     enabled by --push-peer-info
+      */
+     int push_peer_info_detail;
++
++    /** OpenP2S: Azure compatibility mode, mirrored from options->azure_compat
++     * so the TLS layer can see it. */
++    bool azure_compat;
++
+     int transition_window;
+     int handshake_window;
+     interval_t packet_timeout;

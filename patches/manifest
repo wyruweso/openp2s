@@ -16,7 +16,25 @@
 # scripts/build-openvpn.sh reads this; scripts/verify-provenance.sh checks a
 # built tree against it.
 
-DEFAULT_VERSION=2.7.6
+DEFAULT_VERSION=2.7.8
+
+# ---------------------------------------------------------------- 2.7.8 ---
+# Carries the security fixes in 2.7.7 and 2.7.8. The patches are byte-identical
+# to 2.7.6 and apply with --fuzz=0. Connected to a live Azure Entra P2S gateway
+# on 2026-10-30. See the 2.7.6 notes below for what each patch does.
+
+2.7.8.tarball=openvpn-2.7.8.tar.gz
+2.7.8.url=https://swupdate.openvpn.net/community/releases/openvpn-2.7.8.tar.gz
+2.7.8.tarball_sha256=c070d1d2440b5a6fca6c2c68645c98cd492116ac36ef4f0946177115532c8e36
+2.7.8.tag=v2.7.8
+2.7.8.tag_object=7cf7ae23c051533d42aff2e4fa265d779d422cf1
+2.7.8.commit=dc1f569087135894ac2703aeabd7a960ee9452d4
+2.7.8.patch.long_credentials=patches/2.7.8/long-credentials.patch
+2.7.8.patch.long_credentials_sha256=755b9d2fb67d44a1d5cab6caa84bc2a32980ffec4e7a58cb3c5b783f95bed52c
+2.7.8.patch.experimental_azure_compat=patches/2.7.8/experimental-azure-compat.patch
+2.7.8.patch.experimental_azure_compat_sha256=8ecbbe3e2e720924b68324cf6ee0e759a19c115c4c67d27ef9d47222d2864c80
+2.7.8.user_pass_len=4096
+2.7.8.tls_channel_buf_size=8192
 
 # ---------------------------------------------------------------- 2.7.6 ---
 # Verified against a live Azure Entra P2S gateway on 2026-08-27/28.
