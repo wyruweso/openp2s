@@ -86,8 +86,9 @@ so the value must be the CN exactly as the gateway presents it:
 openp2s connect profile.xml --verify-name '<certificate-cn>'
 ```
 
-Run `openp2s connect --verbose` once to see the CN the gateway presents. This
-is not the default because that name varies between clouds and gateway
+`openp2s probe` reports the CN the gateway presents. A probe has no pin, so check
+that name before trusting it. A mismatch stops the connection rather than
+retrying. This is not the default because that name varies between clouds and gateway
 generations, and a wrong value fails the connection outright.
 
 ## Local security assumptions
