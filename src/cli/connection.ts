@@ -185,6 +185,12 @@ export class Connection {
       const server = new ManagementServer({
         socketPath: paths.managementSocket,
         credentials: { username: AZURE_USERNAME, password: outcome.accessToken },
+        refreshPassword: () => this.currentToken(),
+        onRefreshFailed: (error) =>
+          events?.onWarning?.(
+            `could not get a current Entra token to reconnect with: ${describeError(error)}. ` +
+              'Stopping OpenVPN; run connect again.',
+          ),
         ...(events?.onLogLine ? { onDebug: events.onLogLine } : {}),
       });
       await server.start();
@@ -314,6 +320,13 @@ export class Connection {
     await this.session.write(record);
 
     return record;
+  }
+
+  /** A token for a reconnect. Same checks as the first, and may sign in again. */
+  private async currentToken(): Promise<string> {
+    const outcome = await this.options.authenticator.acquireToken();
+    assertTokenFits(outcome.accessToken, this.options.credentialLimits);
+    return outcome.accessToken;
   }
 
   /**
