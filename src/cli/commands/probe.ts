@@ -307,6 +307,7 @@ async function runProbe(
       CONNECTION_STAGES.map((s) => (stageRank(s) <= stageRank(stage) ? s : `(${s})`)).join(' -> '),
     ],
     ['TLS', connection.tlsCipher ?? 'not negotiated'],
+    ['Certificate', connection.certificateName ?? 'not verified'],
     // Two separate facts. The credential fitting through the control channel
     // is what the patch fixes; the gateway accepting it is a different
     // question, and PUSH_REPLY is the only evidence of it.
