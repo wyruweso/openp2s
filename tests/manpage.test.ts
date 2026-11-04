@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { AuthError, NetworkError, OpenP2SError, ProfileError, TunnelError } from '../src/errors.ts';
+import { requireCertificateName } from '../src/openvpn/certificateName.ts';
 import { renderOpenVpnConfig } from '../src/openvpn/config.ts';
 import { resolveUserIdentity } from '../src/platform/paths.ts';
 import { Elevator } from '../src/platform/privilege.ts';
@@ -175,6 +176,15 @@ describe('documented exit codes match the code', () => {
 });
 
 describe('claims that are enforced, and so may be stated absolutely', () => {
+  it('says the certificate name is always checked, and connect has no way round it', () => {
+    assert.match(PROSE, /certificate's name is always checked/i);
+    assert.match(PROSE, /no option to turn that off/i);
+
+    const unknown = { gateway: 'vpn.example.com', gateways: ['vpn.example.com'] };
+    assert.throws(() => requireCertificateName(unknown), OpenP2SError);
+    assert.ok(!root('src/cli/main.ts').includes('--no-verify'), 'no flag may disable the check');
+  });
+
   it('says certificate verification cannot be disabled, and the renderer agrees', () => {
     assert.match(PROSE, /Certificate verification is never disabled/i);
 

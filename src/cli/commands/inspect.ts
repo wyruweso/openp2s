@@ -20,6 +20,7 @@
 import { describeAzureCompat } from '../../openvpn/azureCompat.ts';
 import { locateOpenVpnBinary } from '../../openvpn/binary.ts';
 import { PINNED_ROOT_MESSAGE, pinnedRootSupport, resolveCaPath } from '../../openvpn/ca.ts';
+import { resolveCertificateName } from '../../openvpn/certificateName.ts';
 import { summariseProfile } from '../../profile/types.ts';
 import { createContext, loadProfile, type GlobalOptions } from '../context.ts';
 
@@ -52,6 +53,11 @@ export async function inspectCommand(
 
   ui.fields([
     ['Gateway', `${summary.gateway}:${summary.port}`],
+    [
+      'Certificate name',
+      resolveCertificateName(profile.gateways) ??
+        'cannot be worked out; connect needs --verify-name',
+    ],
     ['Authentication', 'Microsoft Entra ID'],
     ['Tenant', summary.tenantId],
     ['Authority', summary.authority],

@@ -109,6 +109,11 @@ grep -q '<tls-auth>' "$WORK/out.ovpn" || die "no inline tls-auth key"
 grep -qE '^dev tun$' "$WORK/out.ovpn" || die "no tun device"
 ok "carries a remote, a tun device and the inline tls-auth key"
 
+# The profile is a standard Azure gateway, so no argument was needed for this.
+grep -qE '^verify-x509-name [^ ]+ name$' "$WORK/out.ovpn" \
+  || die "the converted config does not check the certificate name"
+ok "checks the certificate name without being asked"
+
 # ---- doctor ---------------------------------------------------------------
 #
 # A CI runner has no /dev/net/tun and no systemd-resolved, so findings are
