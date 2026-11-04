@@ -78,10 +78,11 @@ export class SystemdResolvedConfigurator implements DnsConfigurator {
         await this.resolvectlRun(['domain', interfaceName, ...routingDomains]);
       }
 
-      // Servers last. Once a link has one, resolved can send it queries, so
-      // everything that limits which queries has to be in place first. A failure
-      // part-way through then leaves a link with no servers, which nothing is sent
-      // to. Done the other way round, it could leave one taking every query.
+      // Servers last, as systemd's docs/RESOLVED-VPNS.md asks. Once a link has one,
+      // resolved can send it queries, so everything that limits which queries has
+      // to be in place first. A failure part-way through then leaves a link with no
+      // servers, which nothing is sent to. Done the other way round, it could leave
+      // one taking every query.
       await this.resolvectlRun(['dns', interfaceName, ...dnsServers]);
     } catch (error) {
       throw new NetworkError(`failed to configure DNS on ${interfaceName}`, {
