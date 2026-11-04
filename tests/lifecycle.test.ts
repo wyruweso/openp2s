@@ -72,13 +72,19 @@ class FakeDns implements DnsConfigurator {
   readonly configured: Array<{ iface: string; servers: string[]; domains: string[] }> = [];
   readonly reverted: string[] = [];
   failOnConfigure: Error | undefined;
+  /** Fails only this interface, once the gate opens. */
+  failOnInterface: string | undefined;
+  /** When set, configure() waits for this, like a slow sudo. */
+  gate: Promise<void> | undefined;
 
   async configure(
     iface: string,
     servers: readonly string[],
     domains: readonly string[],
   ): Promise<void> {
+    if (this.gate) await this.gate;
     if (this.failOnConfigure) throw this.failOnConfigure;
+    if (iface === this.failOnInterface) throw new NetworkError(`${iface} has gone`);
     this.configured.push({ iface, servers: [...servers], domains: [...domains] });
   }
 
@@ -888,6 +894,222 @@ describe('lifecycle: session record', () => {
     await connection.connect();
 
     assert.equal(statSync(paths.sessionFile).mode & 0o777, 0o600);
+    await connection.disconnect();
+  });
+});
+
+describe('a tunnel that drops and comes back', () => {
+  const RECONNECT_LOG = [
+    'SIGUSR1[soft,connection-reset] received, process restarting',
+    'TUN/TAP device tun1 opened',
+    'net_addr_v4_add: 172.16.0.9/24 dev tun1',
+    'Initialization Sequence Completed',
+  ];
+
+  const SECOND_RECONNECT_LOG = [
+    'SIGUSR1[soft,connection-reset] received, process restarting',
+    'TUN/TAP device tun2 opened',
+    'net_addr_v4_add: 172.16.0.10/24 dev tun2',
+    'Initialization Sequence Completed',
+  ];
+
+  /** The reconnect work is event-driven, so wait for what it leaves behind. */
+  async function until(predicate: () => boolean): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, 'timed out waiting for the reconnect to be handled');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  it('reapplies DNS to the new interface and updates the session record', async () => {
+    const { connection, dns, spawner, warnings } = build();
+    await connection.connect();
+    assert.deepEqual(
+      dns.configured.map((entry) => entry.iface),
+      ['tun0'],
+    );
+
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => dns.configured.length === 2);
+    assert.equal(dns.configured[1]?.iface, 'tun1');
+    assert.ok(warnings.some((warning) => /tunnel dropped/.test(warning)));
+
+    const store = new SessionStore(paths.sessionFile);
+    let record = await store.read();
+    await until(() => {
+      void store.read().then((current) => {
+        record = current;
+      });
+      return record?.interfaceName === 'tun1';
+    });
+    assert.equal(record?.assignedAddress, '172.16.0.9');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun1']);
+  });
+
+  it('warns loudly when DNS cannot be restored, and keeps the tunnel', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    assert.equal(spawner.process.signals.length, 0);
+    await connection.disconnect();
+  });
+
+  it('records the new interface even when DNS cannot be restored', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    const record = await new SessionStore(paths.sessionFile).read();
+    assert.equal(record?.interfaceName, 'tun1', 'status and disconnect rely on this');
+    assert.equal(record?.assignedAddress, '172.16.0.9');
+    assert.deepEqual(record?.dnsServers, [], 'the record must not claim DNS it does not have');
+    assert.match(record?.dnsFailure ?? '', /resolved said no/, 'doctor reports this');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, [], 'nothing was applied to the new link');
+  });
+
+  it('records DNS again once a later reconnect restores it', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+    const store = new SessionStore(paths.sessionFile);
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    dns.failOnConfigure = undefined;
+    spawner.process.emitLog(SECOND_RECONNECT_LOG);
+    await until(() => dns.configured.at(-1)?.iface === 'tun2');
+    let servers: readonly string[] = [];
+    await until(() => {
+      void store.read().then((record) => {
+        servers = record?.dnsServers ?? [];
+      });
+      return servers.length > 0;
+    });
+    assert.equal((await store.read())?.dnsFailure, undefined, 'the failure is over');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun2']);
+  });
+
+  it('handles quick reconnects in order, so the newest decides the record', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    let open = (): void => undefined;
+    dns.gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    spawner.process.emitLog(SECOND_RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    dns.gate = undefined;
+    open();
+
+    await until(() => dns.configured.at(-1)?.iface === 'tun2');
+    assert.deepEqual(
+      dns.configured.map((entry) => entry.iface),
+      ['tun0', 'tun1', 'tun2'],
+    );
+
+    await until(() => warnings.length >= 2);
+    const record = await new SessionStore(paths.sessionFile).read();
+    assert.equal(record?.interfaceName, 'tun2');
+    assert.equal(record?.assignedAddress, '172.16.0.10');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun2']);
+  });
+
+  it('does not report a DNS failure on a link a newer reconnect replaced', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    let open = (): void => undefined;
+    dns.gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    dns.failOnInterface = 'tun1';
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    spawner.process.emitLog(SECOND_RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    dns.gate = undefined;
+    open();
+
+    await until(() => dns.configured.at(-1)?.iface === 'tun2');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(!warnings.some((warning) => /could not be restored/.test(warning)));
+
+    await connection.disconnect();
+  });
+
+  it('does not recreate a record that disconnect has removed', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner } = build({ dns });
+    await connection.connect();
+    const store = new SessionStore(paths.sessionFile);
+
+    await store.clear();
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(await store.read(), undefined);
+    assert.equal(dns.configured.length, 1, 'nor should it reconfigure DNS');
+
+    await connection.disconnect();
+  });
+
+  it('leaves a session being disconnected alone', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner } = build({ dns });
+    await connection.connect();
+    const store = new SessionStore(paths.sessionFile);
+
+    const record = await store.read();
+    assert.ok(record);
+    const stamp = new Date().toISOString();
+    await store.write({ ...record, disconnectRequestedAt: stamp });
+
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const after = await store.read();
+    assert.equal(after?.disconnectRequestedAt, stamp, 'the stamp must survive');
+    assert.equal(after?.interfaceName, 'tun0');
+    assert.equal(dns.configured.length, 1);
+
+    await connection.disconnect();
+  });
+
+  it('stays quiet about restarts before the first connection', async () => {
+    const spawner = new FakeSpawner({
+      script: [
+        'SIGUSR1[soft,connection-reset] received, process restarting',
+        ...SUCCESSFUL_CONNECT_LOG,
+      ],
+    });
+    const { connection, warnings } = build({ spawner });
+    await connection.connect();
+    assert.equal(warnings.filter((warning) => /tunnel dropped/.test(warning)).length, 0);
     await connection.disconnect();
   });
 });

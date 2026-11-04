@@ -341,6 +341,16 @@ export async function liveChecks(
     });
   }
 
+  if (record.dnsFailure) {
+    checks.push({
+      status: 'fail',
+      label: 'VPN DNS could not be restored after a reconnect',
+      detail: record.dnsFailure,
+      fix: 'Private names will not resolve correctly. Disconnect and connect again.',
+    });
+    return checks;
+  }
+
   if (record.dnsServers.length === 0) {
     checks.push({ status: 'skip', label: 'no DNS was configured for this connection' });
     return checks;

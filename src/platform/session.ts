@@ -45,6 +45,13 @@ export interface SessionRecord {
   readonly assignedAddress: string | undefined;
   readonly dnsServers: readonly string[];
   readonly dnsDomains: readonly string[];
+  /**
+   * Why DNS could not be restored after a reconnect, for as long as that is true.
+   *
+   * Empty dnsServers alone would look the same as a connection that never wanted
+   * DNS, and `doctor` would skip the very thing that is broken.
+   */
+  readonly dnsFailure?: string | undefined;
   readonly pushedRoutes: readonly string[];
   readonly includeRoutes: readonly string[];
   readonly account: string | undefined;
