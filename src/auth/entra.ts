@@ -75,6 +75,8 @@ export interface AuthOutcome {
  */
 export interface TokenSource {
   acquireToken(forceInteractive?: boolean): Promise<AuthOutcome>;
+  /** A current token with no user interaction, or an AuthError if there is none. */
+  acquireTokenSilently(): Promise<AuthOutcome>;
 }
 
 /**
@@ -334,6 +336,19 @@ export class EntraAuthenticator implements TokenSource {
     // Conditional Access denial, or a redirect URI the app does not permit.
     const flow = this.flow;
     return flow === 'browser' ? await this.acquireByBrowser() : await this.acquireByDeviceCode();
+  }
+
+  /**
+   * A current token for a reconnect, without involving the user.
+   *
+   * A reconnect can happen at any time, with nobody watching. A sign-in started
+   * then would open a browser out of nowhere, teach people to approve prompts
+   * they did not ask for, and wait with no timeout while the tunnel stays down.
+   */
+  async acquireTokenSilently(): Promise<AuthOutcome> {
+    const silent = await this.trySilent();
+    if (silent) return silent;
+    throw new AuthError('the Entra session can no longer be renewed without signing in');
   }
 
   /**

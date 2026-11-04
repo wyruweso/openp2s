@@ -233,13 +233,14 @@ export class ManagementServer {
       return;
     }
 
-    refreshPassword().then(
-      (password) => this.sendCredentials(password),
-      (error: unknown) => {
+    // Nothing is waiting on this promise, so a failure in either step has to be
+    // handled here. An unhandled rejection would end the process without teardown.
+    refreshPassword()
+      .then((password) => this.sendCredentials(password))
+      .catch((error: unknown) => {
         this.options.onRefreshFailed?.(error);
         this.send('signal SIGTERM');
-      },
-    );
+      });
   }
 
   /**
