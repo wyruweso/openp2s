@@ -205,6 +205,12 @@ export class Connection {
       const server = new ManagementServer({
         socketPath: paths.managementSocket,
         credentials: { username: AZURE_USERNAME, password: outcome.accessToken },
+        refreshPassword: () => this.currentToken(),
+        onRefreshFailed: (error) =>
+          events?.onWarning?.(
+            `could not get a current Entra token to reconnect with: ${describeError(error)}. ` +
+              'Stopping OpenVPN; run connect again.',
+          ),
         ...(events?.onLogLine ? { onDebug: events.onLogLine } : {}),
       });
       await server.start();
@@ -335,6 +341,18 @@ export class Connection {
     await this.session.write(record);
 
     return record;
+  }
+
+  /** A token for a reconnect. Same checks as the first, and never signs in. */
+  private async currentToken(): Promise<string> {
+    const outcome = await this.options.authenticator.acquireTokenSilently();
+    // Graph can fail here even if it worked at connect, and the address pool
+    // would then change mid-session. That must not happen silently.
+    if (outcome.groupTokenFailure) {
+      this.options.events?.onWarning?.(groupTokenWarning(outcome.groupTokenFailure));
+    }
+    assertTokenFits(outcome.accessToken, this.options.credentialLimits);
+    return outcome.accessToken;
   }
 
   /**
