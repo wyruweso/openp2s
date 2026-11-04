@@ -318,3 +318,64 @@ describe('ManagementServer: protocol', () => {
     client.close();
   });
 });
+
+describe('credential requests after a reconnect', () => {
+  const decodedPassword = (lines: readonly string[]): string[] => {
+    const passwords: string[] = [];
+    let chunks: string[] | undefined;
+    for (const line of lines) {
+      if (line === 'password "Auth"') chunks = [];
+      else if (line === 'END' && chunks) {
+        passwords.push(Buffer.from(chunks.join(''), 'base64').toString('utf8'));
+        chunks = undefined;
+      } else if (chunks) chunks.push(line);
+    }
+    return passwords;
+  };
+
+  it('answers the first request with the first token, and later ones with a current one', async () => {
+    let refreshes = 0;
+    const created = new ManagementServer({
+      socketPath,
+      credentials: { username: 'AzureAD', password: 'first-token' },
+      refreshPassword: async () => `fresh-token-${(refreshes += 1)}`,
+    });
+    await created.start();
+    server = created;
+
+    const client = new FakeOpenVpnClient();
+    await client.connect(socketPath);
+    client.send(">PASSWORD:Need 'Auth' username/password");
+    await client.until(() => decodedPassword(client.received).length === 1);
+    client.send(">PASSWORD:Need 'Auth' username/password");
+    await client.until(() => decodedPassword(client.received).length === 2);
+    client.close();
+
+    assert.deepEqual(decodedPassword(client.received), ['first-token', 'fresh-token-1']);
+  });
+
+  it('stops OpenVPN rather than resending a token it could not renew', async () => {
+    const failures: unknown[] = [];
+    const created = new ManagementServer({
+      socketPath,
+      credentials: { username: 'AzureAD', password: 'first-token' },
+      refreshPassword: async () => {
+        throw new Error('sign-in required');
+      },
+      onRefreshFailed: (error) => failures.push(error),
+    });
+    await created.start();
+    server = created;
+
+    const client = new FakeOpenVpnClient();
+    await client.connect(socketPath);
+    client.send(">PASSWORD:Need 'Auth' username/password");
+    await client.until(() => decodedPassword(client.received).length === 1);
+    client.send(">PASSWORD:Need 'Auth' username/password");
+    await client.until(() => client.received.includes('signal SIGTERM'));
+    client.close();
+
+    assert.equal(decodedPassword(client.received).length, 1);
+    assert.equal(failures.length, 1);
+  });
+});

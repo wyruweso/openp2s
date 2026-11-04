@@ -55,6 +55,16 @@ export interface ManagementCredentials {
 export interface ManagementServerOptions {
   readonly socketPath: string;
   readonly credentials: ManagementCredentials;
+  /**
+   * Supplies a current token for every request after the first.
+   *
+   * OpenVPN asks again each time it reconnects, and by then the original token
+   * may have expired. A rejection stops OpenVPN: an expired token would only
+   * earn an AUTH_FAILED that hides the real reason.
+   */
+  readonly refreshPassword?: () => Promise<string>;
+  /** Called when refreshPassword rejected. Receives no credential. */
+  readonly onRefreshFailed?: (error: unknown) => void;
   /** Diagnostics. Never receives the password. */
   readonly onDebug?: (message: string) => void;
   /** Called if the gateway rejects the credentials. */
@@ -215,6 +225,24 @@ export class ManagementServer {
     this.connection?.write(`${command}\n`);
   }
 
+  /** Answer a credential request: the first token, then a current one. */
+  private answerCredentialRequest(): void {
+    const { refreshPassword } = this.options;
+    if (!this.credentialsSent || !refreshPassword) {
+      this.sendCredentials(this.options.credentials.password);
+      return;
+    }
+
+    // Nothing is waiting on this promise, so a failure in either step has to be
+    // handled here. An unhandled rejection would end the process without teardown.
+    refreshPassword()
+      .then((password) => this.sendCredentials(password))
+      .catch((error: unknown) => {
+        this.options.onRefreshFailed?.(error);
+        this.send('signal SIGTERM');
+      });
+  }
+
   /**
    * Send the credentials.
    *
@@ -222,8 +250,8 @@ export class ManagementServer {
    * split across lines, terminated by END - the only form that can carry a
    * multi-kilobyte token.
    */
-  private sendCredentials(): void {
-    const { username, password } = this.options.credentials;
+  private sendCredentials(password: string): void {
+    const { username } = this.options.credentials;
 
     this.send(`username "Auth" ${quote(username)}`);
 
@@ -261,7 +289,7 @@ export class ManagementServer {
     }
 
     if (line.startsWith(">PASSWORD:Need 'Auth'")) {
-      this.sendCredentials();
+      this.answerCredentialRequest();
       return;
     }
 

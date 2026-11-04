@@ -150,7 +150,9 @@ export function renderOpenVpnConfig(options: RenderOptions): string {
     'resolv-retry infinite',
     '',
     '# Require the peer certificate to carry the TLS server extended key',
-    '# usage, and validate the chain against the system trust store.',
+    options.inlineCa
+      ? '# usage, and validate the chain against the roots embedded below.'
+      : '# usage, and validate the chain against the system trust store.',
     'remote-cert-tls server',
   ];
 

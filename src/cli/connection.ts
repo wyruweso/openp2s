@@ -22,8 +22,9 @@
  */
 
 import type { AuthOutcome, TokenSource } from '../auth/entra.ts';
+import { groupTokenWarning } from '../auth/groupToken.ts';
 import { RuntimeCredentials, writePrivateFile } from '../auth/runtimeCredentials.ts';
-import { describeError, TunnelError } from '../errors.ts';
+import { describeError, OpenP2SError, TunnelError } from '../errors.ts';
 import { AZURE_USERNAME } from '../openvpn/azureCompat.ts';
 import { ManagementServer, supportsMultilinePassword } from '../openvpn/management.ts';
 import {
@@ -61,6 +62,8 @@ export interface ConnectionOptions {
   readonly paths: OpenP2SPaths;
   readonly binary: OpenVpnBinary;
   readonly caPath: string;
+  /** Roots to embed in the config instead of naming caPath. */
+  readonly inlineCa?: string;
   readonly authenticator: TokenSource;
   readonly dns: DnsConfigurator;
   readonly elevator: Elevator;
@@ -150,11 +153,28 @@ export class Connection {
   private async run(): Promise<SessionRecord> {
     const { profile, paths, binary, events } = this.options;
 
+    // A Graph token works well beyond this gateway, so it never goes to a peer
+    // whose certificate name is unchecked. connect always has a name by now;
+    // this catches a probe of a host the name rule does not cover.
+    if (profile.auth.enableGroupToken && !this.options.verifyName) {
+      throw new OpenP2SError(
+        `${profile.gateway} has no certificate name to check, so its group token cannot be sent`,
+        {
+          hint:
+            'Pass the name with --verify-name. To find it first, probe a copy of the\n' +
+            'profile with <enablegrouptoken> set to false, which sends only the VPN token.',
+        },
+      );
+    }
+
     ensurePrivateDir(paths.runtimeDir);
 
     // ---- 1. Entra -------------------------------------------------------
     const outcome = await this.options.authenticator.acquireToken();
     events?.onAuthenticated?.(outcome);
+    if (outcome.groupTokenFailure) {
+      events?.onWarning?.(groupTokenWarning(outcome.groupTokenFailure));
+    }
 
     // Measure the token before handing it anywhere. OpenVPN would truncate a
     // token past USER_PASS_LEN silently, and the resulting AUTH_FAILED gives
@@ -186,6 +206,12 @@ export class Connection {
       const server = new ManagementServer({
         socketPath: paths.managementSocket,
         credentials: { username: AZURE_USERNAME, password: outcome.accessToken },
+        refreshPassword: () => this.currentToken(outcome),
+        onRefreshFailed: (error) =>
+          events?.onWarning?.(
+            `could not get a current Entra token to reconnect with: ${describeError(error)}. ` +
+              'Stopping OpenVPN; run connect again.',
+          ),
         ...(events?.onLogLine ? { onDebug: events.onLogLine } : {}),
       });
       await server.start();
@@ -209,6 +235,7 @@ export class Connection {
       profile,
       credentials,
       caPath: this.options.caPath,
+      ...(this.options.inlineCa ? { inlineCa: this.options.inlineCa } : {}),
       verb: this.options.verb ?? 3,
       verifyName: this.options.verifyName,
       ...(this.options.azureCompat !== undefined ? { azureCompat: this.options.azureCompat } : {}),
@@ -365,6 +392,18 @@ export class Connection {
   }
 
   /**
+   * A token for a reconnect. Same checks as the first, and never signs in.
+   *
+   * It keeps the account and kind of credential the session started with. If it
+   * cannot, this rejects and OpenVPN stops.
+   */
+  private async currentToken(session: AuthOutcome): Promise<string> {
+    const outcome = await this.options.authenticator.acquireTokenSilently(session);
+    assertTokenFits(outcome.accessToken, this.options.credentialLimits);
+    return outcome.accessToken;
+  }
+
+  /**
    * Leave behind enough for `openp2s disconnect` to finish the job.
    *
    * The session record is normally written only once the tunnel is up and DNS
@@ -455,6 +494,11 @@ export class Connection {
 
   get failureReason(): string | undefined {
     return this.tunnel?.details.failureReason;
+  }
+
+  /** The gateway certificate's CN, once verified. */
+  get certificateName(): string | undefined {
+    return this.tunnel?.details.certificateName;
   }
 
   get tlsCipher(): string | undefined {
