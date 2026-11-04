@@ -36,6 +36,10 @@ Graph acquisition is bound to the same account and tenant. A missing or
 mismatched Graph token is not sent: OpenP2S warns and connects with the VPN
 token alone.
 
+A reconnect keeps the account and the kind of credential the session started
+with. If it can't renew those without signing in, OpenVPN stops and you connect
+again, so a live session never changes identity or address pool unnoticed.
+
 ## Sign-in
 
 OpenP2S uses the browser authorization-code flow with PKCE. The authorization

@@ -15,7 +15,7 @@ import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { AuthOutcome, TokenSource } from '../src/auth/entra.ts';
+import type { AuthOutcome, SessionCredential, TokenSource } from '../src/auth/entra.ts';
 import { AuthError, NetworkError, TunnelError } from '../src/errors.ts';
 import type { DnsConfigurator } from '../src/network/dns.ts';
 import type { OpenVpnBinary } from '../src/openvpn/binary.ts';
@@ -45,6 +45,7 @@ const USER: UserIdentity = {
 class FakeTokenSource implements TokenSource {
   calls = 0;
   silentCalls = 0;
+  lastSession: SessionCredential | undefined;
   private readonly outcome: AuthOutcome | Error;
   private readonly renewal: AuthOutcome | Error;
 
@@ -59,8 +60,9 @@ class FakeTokenSource implements TokenSource {
     return this.outcome;
   }
 
-  async acquireTokenSilently(): Promise<AuthOutcome> {
+  async acquireTokenSilently(session: SessionCredential): Promise<AuthOutcome> {
     this.silentCalls += 1;
+    this.lastSession = session;
     if (this.renewal instanceof Error) throw this.renewal;
     return this.renewal;
   }
@@ -104,6 +106,7 @@ function successOutcome(): AuthOutcome {
     account: 'user@contoso.example',
     tenantId: '11111111-2222-3333-4444-555555555555',
     fromCache: true,
+    homeAccountId: 'home-1',
   };
 }
 
@@ -310,27 +313,19 @@ describe('lifecycle: credential requests on a reconnect', () => {
     await connection.disconnect();
   });
 
-  it('warns when a reconnect has to fall back to the VPN token alone', async () => {
-    const auth = new FakeTokenSource(successOutcome(), {
-      ...successOutcome(),
-      groupTokenFailure: 'consent required',
-    });
-    const { connection, warnings } = build({ auth });
+  it('renews for the account and credential the session started with', async () => {
+    const auth = new FakeTokenSource({ ...successOutcome(), groupToken: true });
+    const { connection } = build({ auth });
     await connection.connect();
     const openVpn = await openVpnSide();
 
     openVpn.ask();
     await openVpn.until(() => answers(openVpn.received) === 1);
-    assert.deepEqual(warnings, [], 'nothing to say about the first token');
-
     openVpn.ask();
     await openVpn.until(() => answers(openVpn.received) === 2);
-    assert.ok(
-      warnings.some(
-        (warning) => /VPN token alone/.test(warning) && /consent required/.test(warning),
-      ),
-      `expected a group-token warning, got ${JSON.stringify(warnings)}`,
-    );
+
+    assert.equal(auth.lastSession?.homeAccountId, 'home-1');
+    assert.equal(auth.lastSession?.groupToken, true);
 
     openVpn.close();
     await connection.disconnect();
