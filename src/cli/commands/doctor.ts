@@ -14,12 +14,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import {
-  PINNED_ROOT_MESSAGE,
-  pinnedRootSupport,
-  resolveCaPath,
-  usesBuiltInRoots,
-} from '../../openvpn/ca.ts';
+import { PINNED_ROOT_MESSAGE, pinnedRootSupport, resolveCaPath } from '../../openvpn/ca.ts';
 import { locateOpenVpnBinary } from '../../openvpn/binary.ts';
 import { isSystemdResolvedActive } from '../../network/systemdResolved.ts';
 import { toRoutingDomain } from '../../network/dns.ts';
@@ -126,11 +121,52 @@ async function interfaceExists(
   }
 }
 
+/**
+ * What this gateway would be validated against, as `connect` would see it.
+ *
+ * A green tick here has to mean connect will not fail for this reason, so the
+ * severity follows from what connect needs. Without a profile there is no way
+ * to know whether the system store matters: Azure gateways do not need it.
+ */
+export function caCheck(
+  override: string | undefined,
+  gateways: readonly string[] | undefined,
+  exists?: (path: string) => boolean,
+): Check {
+  const resolveOptions = { ...(gateways ? { gateways } : {}), ...(exists ? { exists } : {}) };
+  try {
+    const ca = resolveCaPath(override, resolveOptions);
+    if (override)
+      return { status: 'ok', label: 'the CA file from --ca is available', detail: ca.path };
+    if (ca.inlinePem)
+      return { status: 'ok', label: 'the roots for this gateway ship with OpenP2S' };
+    return {
+      status: 'ok',
+      label: ca.pinned ? 'DigiCert Global Root G2 is available' : 'system CA bundle is available',
+      detail: ca.path,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : undefined;
+    if (override) return { status: 'fail', label: 'the CA file from --ca was not found', detail };
+    const install = "Install your distribution's CA certificates package.";
+    return gateways
+      ? { status: 'fail', label: 'no system CA store found for this gateway', detail, fix: install }
+      : {
+          status: 'warn',
+          label: 'no system CA store found',
+          detail,
+          fix: `Only gateways outside vpn.azure.com need it. ${install}`,
+        };
+  }
+}
+
 async function environmentChecks(
   context: CommandContext,
   options: DoctorOptions,
   /** True when a profile was given and it actually needs split DNS. */
   dnsRequired: boolean | undefined,
+  /** The profile's gateways, when one was given and could be read. */
+  gateways: readonly string[] | undefined,
 ): Promise<Check[]> {
   const checks: Check[] = [];
 
@@ -163,23 +199,7 @@ async function environmentChecks(
         },
   );
 
-  // Only gateways outside vpn.azure.com depend on this: the roots for Azure
-  // gateways ship with OpenP2S. So a missing store is worth saying, but not a failure.
-  try {
-    const ca = resolveCaPath(options.ca);
-    checks.push({
-      status: 'ok',
-      label: ca.pinned ? 'DigiCert Global Root G2 is available' : 'system CA bundle is available',
-      detail: ca.path,
-    });
-  } catch (error) {
-    checks.push({
-      status: 'warn',
-      label: 'no system CA store found',
-      detail: error instanceof Error ? error.message : undefined,
-      fix: "Only gateways outside vpn.azure.com need it. Install your distribution's CA certificates package.",
-    });
-  }
+  checks.push(caCheck(options.ca, gateways));
 
   try {
     const binary = locateOpenVpnBinary({ repoRoot: context.repoRoot });
@@ -216,10 +236,6 @@ async function profileChecks(context: CommandContext, profile: AzureVpnProfile):
       detail: profile.gateway,
       fix: 'Check your internet connection, or re-export the profile.',
     });
-  }
-
-  if (usesBuiltInRoots(profile.gateways)) {
-    checks.push({ status: 'ok', label: 'the roots for this gateway ship with OpenP2S' });
   }
 
   if (pinnedRootSupport(profile) === 'unsupported') {
@@ -511,7 +527,7 @@ export async function doctorCommand(
   }
   const dnsRequired = profile ? profile.dnsServers.length > 0 : undefined;
 
-  const environment = await environmentChecks(context, options, dnsRequired);
+  const environment = await environmentChecks(context, options, dnsRequired, profile?.gateways);
   render(context, environment);
   all.push(...environment);
 

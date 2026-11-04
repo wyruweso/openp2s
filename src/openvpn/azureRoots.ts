@@ -17,8 +17,16 @@
  *
  * The cost of this choice: a distribution update cannot withdraw these roots,
  * and if Azure moves to another root, connecting fails until OpenP2S is updated
- * or the user passes --ca. Remove a root here once no gateway uses it. They expire
- * in 2031 (Root CA) and 2038 (G2).
+ * or the user passes --ca. They expire in 2031 (Root CA) and 2038 (G2).
+ *
+ * Keeping this list is therefore this project's job:
+ *
+ * - Add a root as soon as gateway certificates are seen under one not listed here.
+ * - Remove a root once no valid certificate under vpn.azure.com chains to it.
+ * - If a root is distrusted for cause, such as a compromise, rather than on a
+ *   planned schedule, remove it and release at once, and say so in the release
+ *   notes. Gateways that still use it will stop working until they move or the
+ *   user passes --ca, which is the right way to fail.
  *
  * The certificate name check is what identifies the gateway. These only decide
  * which authorities may vouch for that name.
