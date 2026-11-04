@@ -251,9 +251,7 @@ describe('lifecycle: certificate authority', () => {
     const { connection } = build({ inlineCa: 'INLINE-ROOTS' });
     await connection.connect();
     const config = readFileSync(paths.configFile, 'utf8');
-    assert.ok(config.includes('<ca>
-INLINE-ROOTS
-</ca>'));
+    assert.ok(config.includes('<ca>\nINLINE-ROOTS\n</ca>'));
     assert.ok(!/^ca /m.test(config), 'it must not also name a CA file');
     await connection.disconnect();
   });
