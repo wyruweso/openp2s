@@ -735,6 +735,36 @@ describe('flow-specific failure hints', () => {
   });
 });
 
+describe('renewing a token for a reconnect', () => {
+  it('returns a current token without prompting', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    const result = await authenticator().acquireTokenSilently();
+    assert.equal(result.accessToken, TOKEN);
+    assert.equal(msal.deviceCodeRequests.length, 0);
+    assert.equal(msal.interactiveRequests.length, 0);
+  });
+
+  it('fails rather than starting a sign-in, on either flow', async () => {
+    for (const flow of ['browser', 'device-code'] as const) {
+      msal.accounts = [ACCOUNT];
+      msal.silent = new Error('interaction_required');
+      await assert.rejects(authenticator(AUTH, msal, flow).acquireTokenSilently(), AuthError);
+    }
+    assert.equal(msal.deviceCodeRequests.length, 0);
+    assert.equal(msal.interactiveRequests.length, 0);
+  });
+
+  it('reports a group token it could not renew', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    msal.group = new Error('consent required');
+    const result = await authenticator({ ...AUTH, enableGroupToken: true }).acquireTokenSilently();
+    assert.equal(result.accessToken, TOKEN);
+    assert.match(result.groupTokenFailure ?? '', /group token/);
+  });
+});
+
 describe('group-aware authentication', () => {
   it('acquires Graph for the same account and uses the earlier expiry', async () => {
     msal.accounts = [ACCOUNT];
