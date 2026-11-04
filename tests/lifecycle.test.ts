@@ -138,6 +138,7 @@ interface BuildOptions {
   readonly credentialLimits?: { readonly userPassLen: number };
   /** Overrides the token the fake authenticator returns. */
   readonly accessToken?: string;
+  readonly verifyName?: string;
 }
 
 function build(options: BuildOptions = {}): {
@@ -171,6 +172,7 @@ function build(options: BuildOptions = {}): {
     ...(options.azureCompat ? { azureCompat: true } : {}),
     ...(options.useCredentialsFile ? { useCredentialsFile: true } : {}),
     ...(options.skipDns ? { skipDns: true } : {}),
+    ...(options.verifyName ? { verifyName: options.verifyName } : {}),
     events: { onWarning: (message) => warnings.push(message) },
   });
 
@@ -191,6 +193,45 @@ function assertNoSecretsLeftBehind(): void {
   assert.ok(!existsSync(paths.configFile), 'generated config must be removed');
   assert.ok(!existsSync(paths.managementSocket), 'management socket must be removed');
 }
+
+describe('lifecycle: group tokens', () => {
+  const withGroupToken = (): AzureVpnProfile => ({
+    ...profile,
+    auth: { ...profile.auth, enableGroupToken: true },
+  });
+
+  it('are not sent to a gateway whose certificate name is unchecked', async () => {
+    const { connection, spawner } = build({ profile: withGroupToken() });
+    await assert.rejects(connection.connect(), /no certificate name to check/);
+    assert.equal(spawner.spawnCount, 0, 'OpenVPN must not start');
+  });
+
+  it('are allowed once the name is checked', async () => {
+    const { connection, spawner } = build({
+      profile: withGroupToken(),
+      verifyName: '*.vpn.azure.com',
+    });
+    await connection.connect();
+    assert.equal(spawner.spawnCount, 1);
+    await connection.disconnect();
+  });
+
+  it('say so when the connection has to use the VPN token alone', async () => {
+    const { connection, warnings } = build({
+      profile: withGroupToken(),
+      verifyName: '*.vpn.azure.com',
+      auth: new FakeTokenSource({ ...successOutcome(), groupTokenFailure: 'consent required' }),
+    });
+    await connection.connect();
+    assert.ok(
+      warnings.some(
+        (warning) => /VPN token alone/.test(warning) && /consent required/.test(warning),
+      ),
+      `expected a group-token warning, got ${JSON.stringify(warnings)}`,
+    );
+    await connection.disconnect();
+  });
+});
 
 describe('lifecycle: successful connection', () => {
   it('brings the tunnel up and records the session', async () => {

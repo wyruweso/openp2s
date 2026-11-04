@@ -325,11 +325,10 @@ export class AzureProfileParser {
     const tenant = validateTenantUrl(tenantText);
     const audience = validateAudience(audienceText);
     const issuer = text(child(aad, 'issuer'));
-    const groupTokenText = text(child(aad, 'enablegrouptoken'));
-    const enableGroupToken = parseBoolean(groupTokenText);
-    if (groupTokenText !== undefined && enableGroupToken === undefined) {
-      throw new ProfileError('<enablegrouptoken> must be true, false, 1 or 0');
-    }
+    // Exactly "true", as in the official client, which sends one token for any
+    // other value. Sending a Graph token on a looser reading would hand it to
+    // the gateway in cases where the client Azure documents would not.
+    const enableGroupToken = text(child(aad, 'enablegrouptoken')) === 'true';
 
     const explicitClientId = text(child(aad, 'clientid')) ?? text(child(root, 'clientid'));
     const clientId = explicitClientId ?? audience.clientId;
@@ -384,7 +383,7 @@ export class AzureProfileParser {
         audience: audience.value,
         scope: audience.scope,
         clientId,
-        ...(enableGroupToken !== undefined ? { enableGroupToken } : {}),
+        ...(enableGroupToken ? { enableGroupToken } : {}),
         ...(issuer ? { issuer } : {}),
       },
       serverSecret,

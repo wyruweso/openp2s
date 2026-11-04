@@ -401,26 +401,16 @@ describe('tenant and audience URL hygiene', () => {
 });
 
 describe('group-token profile setting', () => {
-  it('preserves true and false and rejects malformed values', () => {
+  it('is on only for exactly "true", as in the official client', () => {
     const xml = fixture('azure-schema');
-    for (const value of ['true', '1', 'false', '0']) {
+    for (const value of ['true', 'True', 'TRUE', '1', 'false', '0', 'invalid', '']) {
       const profile = parser.parse(
         xml.replace(
           '<enablegrouptoken>false</enablegrouptoken>',
           `<enablegrouptoken>${value}</enablegrouptoken>`,
         ),
       );
-      assert.equal(profile.auth.enableGroupToken, value === 'true' || value === '1');
+      assert.equal(profile.auth.enableGroupToken === true, value === 'true', value);
     }
-    assert.throws(
-      () =>
-        parser.parse(
-          xml.replace(
-            '<enablegrouptoken>false</enablegrouptoken>',
-            '<enablegrouptoken>invalid</enablegrouptoken>',
-          ),
-        ),
-      ProfileError,
-    );
   });
 });

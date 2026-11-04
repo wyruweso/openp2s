@@ -22,8 +22,9 @@
  */
 
 import type { AuthOutcome, TokenSource } from '../auth/entra.ts';
+import { groupTokenWarning } from '../auth/groupToken.ts';
 import { RuntimeCredentials, writePrivateFile } from '../auth/runtimeCredentials.ts';
-import { describeError, TunnelError } from '../errors.ts';
+import { describeError, OpenP2SError, TunnelError } from '../errors.ts';
 import { AZURE_USERNAME } from '../openvpn/azureCompat.ts';
 import { ManagementServer, supportsMultilinePassword } from '../openvpn/management.ts';
 import {
@@ -149,11 +150,28 @@ export class Connection {
   private async run(): Promise<SessionRecord> {
     const { profile, paths, binary, events } = this.options;
 
+    // A Graph token works well beyond this gateway, so it never goes to a peer
+    // whose certificate name is unchecked. connect always has a name by now;
+    // this catches a probe of a host the name rule does not cover.
+    if (profile.auth.enableGroupToken && !this.options.verifyName) {
+      throw new OpenP2SError(
+        `${profile.gateway} has no certificate name to check, so its group token cannot be sent`,
+        {
+          hint:
+            'Pass the name with --verify-name. To find it first, probe a copy of the\n' +
+            'profile with <enablegrouptoken> set to false, which sends only the VPN token.',
+        },
+      );
+    }
+
     ensurePrivateDir(paths.runtimeDir);
 
     // ---- 1. Entra -------------------------------------------------------
     const outcome = await this.options.authenticator.acquireToken();
     events?.onAuthenticated?.(outcome);
+    if (outcome.groupTokenFailure) {
+      events?.onWarning?.(groupTokenWarning(outcome.groupTokenFailure));
+    }
 
     // Measure the token before handing it anywhere. OpenVPN would truncate a
     // token past USER_PASS_LEN silently, and the resulting AUTH_FAILED gives

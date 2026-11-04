@@ -758,14 +758,14 @@ describe('group-aware authentication', () => {
     assert.equal(msal.silentRequests.length, 1);
   });
 
-  it('does not try another identity or sign-in when Graph acquisition fails', async () => {
+  it('falls back to the VPN token, on the same identity, when Graph acquisition fails', async () => {
     msal.accounts = [ACCOUNT, { ...ACCOUNT, homeAccountId: 'another-user' }];
     msal.silent = authResult();
     msal.group = new Error('consent required');
-    await assert.rejects(
-      authenticator({ ...AUTH, enableGroupToken: true }).acquireToken(),
-      /group token/,
-    );
+    const result = await authenticator({ ...AUTH, enableGroupToken: true }).acquireToken();
+    assert.equal(result.accessToken, TOKEN);
+    assert.match(result.groupTokenFailure ?? '', /group token/);
+    assert.match(result.groupTokenFailure ?? '', /consent required/);
     assert.equal(msal.deviceCodeRequests.length, 0);
     assert.equal(msal.interactiveRequests.length, 0);
     assert.deepEqual(
@@ -774,7 +774,7 @@ describe('group-aware authentication', () => {
     );
   });
 
-  it('rejects a missing or mismatched Graph identity', async () => {
+  it('never sends a missing or mismatched Graph token', async () => {
     msal.accounts = [ACCOUNT];
     msal.silent = authResult();
     for (const group of [
@@ -785,40 +785,57 @@ describe('group-aware authentication', () => {
       authResult({ tenantId: 'another-tenant' }),
     ]) {
       msal.group = group;
-      await assert.rejects(
-        authenticator({ ...AUTH, enableGroupToken: true }).acquireToken(),
-        /VPN account and tenant/,
-      );
+      const outcome = await authenticator({ ...AUTH, enableGroupToken: true }).acquireToken();
+      assert.equal(outcome.accessToken, TOKEN);
+      assert.match(outcome.groupTokenFailure ?? '', /VPN account and tenant/);
     }
   });
 
-  it('rejects an unbound VPN identity before requesting Graph', async () => {
+  it('requests no Graph token for an unbound VPN identity', async () => {
     msal.accounts = [ACCOUNT];
     for (const result of [
       authResult({ account: null }),
       authResult({ tenantId: 'another-tenant' }),
     ]) {
       msal.silent = result;
-      await assert.rejects(
-        authenticator({ ...AUTH, enableGroupToken: true }).acquireToken(),
-        /cannot bind the group token/,
-      );
+      const outcome = await authenticator({ ...AUTH, enableGroupToken: true }).acquireToken();
+      assert.match(outcome.groupTokenFailure ?? '', /cannot bind the group token/);
     }
     assert.ok(msal.silentRequests.every((r) => r.scopes[0] === AUTH.scope));
   });
 
-  it('rejects other clouds before requesting a Public-cloud Graph token', async () => {
+  it('requests no Public-cloud Graph token for another cloud', async () => {
     msal.accounts = [ACCOUNT];
     msal.silent = authResult();
-    await assert.rejects(
-      authenticator({
-        ...AUTH,
-        authority: `https://login.microsoftonline.us/${AUTH.tenantId}`,
-        enableGroupToken: true,
-      }).acquireToken(),
-      /Azure Public only/,
-    );
+    const outcome = await authenticator({
+      ...AUTH,
+      authority: `https://login.microsoftonline.us/${AUTH.tenantId}`,
+      enableGroupToken: true,
+    }).acquireToken();
+    assert.equal(outcome.accessToken, TOKEN);
+    assert.match(outcome.groupTokenFailure ?? '', /Azure Public only/);
     assert.equal(msal.silentRequests.length, 1);
+  });
+
+  it('accepts a profile that names its tenant by domain', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    msal.group = authResult({ accessToken: 'graph-token' });
+    const result = await authenticator({
+      ...AUTH,
+      tenantId: 'contoso.onmicrosoft.com',
+      enableGroupToken: true,
+    }).acquireToken();
+    assert.equal(result.accessToken, groupCredential(TOKEN, 'graph-token'));
+    assert.equal(result.groupTokenFailure, undefined);
+  });
+
+  it('keeps tokens out of the failure it reports', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    msal.group = new Error(`refused ${TOKEN}`);
+    const result = await authenticator({ ...AUTH, enableGroupToken: true }).acquireToken();
+    assert.ok(!(result.groupTokenFailure ?? '').includes(TOKEN));
   });
 
   it('does not claim an expiry when either token expiry is unknown', async () => {

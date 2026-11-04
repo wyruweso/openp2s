@@ -1,8 +1,8 @@
 # Azure VPN group-token interoperability
 
-The official Windows client 4.0.5.0 supplies two credentials when the profile
-sets `enablegrouptoken`: the gateway-audience token and a Microsoft Graph token.
-Requesting a `groups` claim on the gateway token is not the same exchange.
+The official Windows client supplies two credentials when the profile sets
+`enablegrouptoken` to `true`: the gateway-audience token and a Microsoft Graph
+token. Requesting a `groups` claim on the gateway token is not the same exchange.
 
 Wire format (ASCII, no separators or terminating NUL inside the credential):
 
@@ -11,31 +11,53 @@ TlvToken:00<vpn length as 8 lowercase hex digits><vpn token>01<graph length as 8
 ```
 
 Types are two ASCII characters. Lengths count token characters, which equal
-bytes for the accepted bearer-token alphabet. OpenVPN adds its own framing.
-Graph scope is `https://graph.microsoft.com/.default`. The gateway evaluates
-membership: the client neither chooses a network group nor invents claims.
+bytes for the accepted bearer-token alphabet. OpenVPN adds its own framing. The
+client neither chooses a network group nor invents claims.
 
 ## Evidence
 
-Inspected the Windows client from Microsoft's download page:
-https://www.microsoft.com/en-us/download/details.aspx?id=108598
+This comes from static inspection of Windows client 4.0.5.0, from Microsoft's
+download page: https://www.microsoft.com/en-us/download/details.aspx?id=108598
 
-In `AzVpnAppx.exe`, the credential assembly at VA `0x14027cb3f`–`0x14027cc71`
-concatenates `TlvToken:`, `00`, `%08x` of the first token length, the first token,
-`01`, `%08x` of the second token length, and the second token. Constants are at
-VA `0x140325398`, `0x14031a12c`, `0x14031a134`, and `0x14031a140` respectively.
-No official client executable was run or installed.
+The inspection confirmed the format above, that the VPN token is type `00` and
+the Graph token type `01`, and that the client sends both only when the setting
+is exactly `true`. No official client executable was run or installed.
+
+How the gateway uses the second token cannot be established from the client,
+and this has not yet been confirmed against a live gateway.
+
+## Where OpenP2S differs from the client
+
+- **Graph request.** The client asks the Windows token broker for the Graph
+  resource with an empty scope. MSAL has no such form, so OpenP2S requests
+  `https://graph.microsoft.com/.default`. Whether the two give an equivalent
+  token has not been confirmed.
+- **Username.** The client sends the account's user name, and OpenP2S sends
+  `AzureAD`, as it does for every profile.
+- **Validation.** OpenP2S refuses to send a token outside the bearer-token
+  alphabet, or a Graph token for another account or tenant. The client checks
+  neither.
+
+## When no Graph token is available
+
+Like the client, OpenP2S only requests the Graph token silently, because a prompt
+could select a different identity. If it cannot get one, it connects with the VPN
+token alone, which is also what the client does, and the gateway may then assign
+its default address pool. OpenP2S warns when this happens.
+
+A Graph token is only sent to a gateway whose certificate name is checked; see
+[SECURITY.md](SECURITY.md).
+
+## Credential size
 
 The combined VPN and Graph credential can exceed the previous 4096-byte limit.
 The two-constant OpenVPN patch now allows 8192 credential bytes, including its
-NUL terminator, and 16384 bytes for the TLS control-channel buffer. Existing
-BUILDINFO-based limits still reject oversized credentials before transmission.
-Unknown binaries retain the conservative 4096-byte assumed limit.
+NUL terminator, and 16384 bytes for the TLS control-channel buffer. Limits read
+from BUILDINFO still reject oversized credentials before transmission. A binary
+whose BUILDINFO records no limit is assumed to have 4096 bytes, and one with no
+trusted BUILDINFO is assumed to have 128. The gateway's own limit is not known.
 
 ## Limits
 
-Only Azure Public has been tested. Graph consent must already be available
-for the same application. This build fails closed if silent Graph acquisition
-fails or returns another account/tenant, rather than opening an account picker
-that could select a different identity. No fallback to a VPN-only credential
-is allowed for profiles that require group authentication.
+Group authentication supports Azure Public only, and Graph consent must already
+be available for the same application.

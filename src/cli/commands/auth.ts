@@ -23,6 +23,7 @@
 
 import type { InteractiveFlow } from '../../auth/entra.ts';
 import { cacheKeysForIdentity } from '../../auth/cache/identity.ts';
+import { groupTokenWarning } from '../../auth/groupToken.ts';
 import type { TokenCacheStore } from '../../auth/cache/store.ts';
 import { AuthError } from '../../errors.ts';
 import {
@@ -211,6 +212,8 @@ export async function authLoginCommand(
   } else {
     ui.ok(`Signed in${outcome.account ? ` as ${outcome.account}` : ''}`);
   }
+
+  if (outcome.groupTokenFailure) ui.warn(groupTokenWarning(outcome.groupTokenFailure));
 
   // Never the token itself; only how long it is good for.
   if (outcome.expiresOn) {

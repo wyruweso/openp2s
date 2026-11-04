@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { groupCredential } from '../src/auth/groupToken.ts';
+import { groupCredential, groupTokenWarning, isProfileTenant } from '../src/auth/groupToken.ts';
 import { assertTokenFits } from '../src/auth/tokenLimits.ts';
 import { AuthError, redact } from '../src/errors.ts';
 import { syntheticLongJwt } from './helpers/syntheticToken.ts';
@@ -30,5 +30,31 @@ describe('Azure group credentials', () => {
     const credential = groupCredential('a'.repeat(1900), 'b'.repeat(2700));
     assert.throws(() => assertTokenFits(credential, { userPassLen: 4096 }), AuthError);
     assert.doesNotThrow(() => assertTokenFits(credential, { userPassLen: 8192 }));
+  });
+});
+
+describe('the tenant a profile names', () => {
+  const TID = 'aaaaaaaa-2222-3333-4444-555555555555';
+
+  it('matches a GUID in any case', () => {
+    assert.ok(isProfileTenant(TID, TID));
+    assert.ok(isProfileTenant(TID.toUpperCase(), TID));
+  });
+
+  it('does not match a different GUID', () => {
+    assert.ok(!isProfileTenant('bbbbbbbb-2222-3333-4444-555555555555', TID));
+  });
+
+  it('cannot be compared when it is a domain, so that is not a mismatch', () => {
+    assert.ok(isProfileTenant('contoso.onmicrosoft.com', TID));
+  });
+});
+
+describe('the warning when no group token could be used', () => {
+  it('says what it means for the connection and gives the reason', () => {
+    const warning = groupTokenWarning('consent required');
+    assert.match(warning, /VPN token alone/);
+    assert.match(warning, /default address pool/);
+    assert.match(warning, /consent required/);
   });
 });

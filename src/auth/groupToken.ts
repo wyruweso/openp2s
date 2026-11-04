@@ -19,3 +19,26 @@ export function groupCredential(vpnToken: string, graphToken: string): string {
   };
   return 'TlvToken:' + field('00', vpnToken) + field('01', graphToken);
 }
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether Entra's tenant id agrees with the tenant the profile names.
+ *
+ * A profile may name its tenant by verified domain, or by a GUID in any case,
+ * while Entra reports a lowercase GUID. Only a GUID can be compared. A domain
+ * is not a mismatch: sign-in already went to that tenant's authority, and the
+ * Graph token is still held to the VPN token's tenant.
+ */
+export function isProfileTenant(profileTenant: string, tenantId: string): boolean {
+  return !GUID.test(profileTenant) || profileTenant.toLowerCase() === tenantId.toLowerCase();
+}
+
+/** What a user needs to hear when the profile's group token could not be used. */
+export function groupTokenWarning(reason: string): string {
+  return (
+    'no Microsoft Graph token is available, so this connection uses the VPN token alone ' +
+    `and the gateway may assign its default address pool (${reason}). The application ` +
+    'needs Microsoft Graph consent in your tenant; your VPN administrator can check this'
+  );
+}

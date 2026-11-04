@@ -29,7 +29,7 @@ import {
   type TokenCacheContext,
 } from '@azure/msal-node';
 import { AuthError, describeError } from '../errors.ts';
-import { GRAPH_SCOPE, groupCredential } from './groupToken.ts';
+import { GRAPH_SCOPE, groupCredential, isProfileTenant } from './groupToken.ts';
 import type { EntraAuthConfig } from '../profile/types.ts';
 import {
   cacheKey,
@@ -50,7 +50,8 @@ export interface DeviceCodePrompt {
 export interface AuthOutcome {
   /**
    * The gateway credential: an Entra access token, or the two-token TLV
-   * envelope when the profile requires group-aware authentication.
+   * envelope when the profile enables group-aware authentication and a Graph
+   * token was available.
    */
   readonly accessToken: string;
   readonly expiresOn: Date | undefined;
@@ -58,6 +59,11 @@ export interface AuthOutcome {
   readonly tenantId: string | undefined;
   /** True when the token came from cache without user interaction. */
   readonly fromCache: boolean;
+  /**
+   * Why the profile's group token could not be used, when it could not. The
+   * credential is then the VPN token alone. Never contains a token.
+   */
+  readonly groupTokenFailure?: string;
 }
 
 /**
@@ -389,7 +395,7 @@ export class EntraAuthenticator implements TokenSource {
    * Returns undefined when the VPN token cannot be acquired. A stale cache,
    * a revoked session and a Conditional Access policy change all look the
    * same from here, and all have the same remedy: sign in again.
-   * Group-token failures propagate once a VPN identity has been selected.
+   * A group-token failure does not count: by then the identity is chosen.
    */
   private async trySilent(): Promise<AuthOutcome | undefined> {
     let accounts: AccountInfo[];
@@ -410,7 +416,8 @@ export class EntraAuthenticator implements TokenSource {
         this.options.onDebug?.(`silent acquisition failed: ${describeError(error)}`);
         continue;
       }
-      // Group failures must not fall through to another account or sign-in.
+      // Whatever happens with Graph, this account is now the identity. Trying
+      // another account or signing in again could change who connects.
       if (result?.accessToken) return this.toOutcome(result, true);
     }
     return undefined;
@@ -471,23 +478,33 @@ export class EntraAuthenticator implements TokenSource {
   }
 
   private async toOutcome(result: AuthenticationResult, fromCache: boolean): Promise<AuthOutcome> {
-    let accessToken = result.accessToken;
-    let expiresOn = result.expiresOn ?? undefined;
-    if (this.auth.enableGroupToken) {
-      const group = await this.acquireGroupToken(result);
-      accessToken = groupCredential(result.accessToken, group.accessToken);
-      expiresOn =
-        expiresOn && group.expiresOn
-          ? new Date(Math.min(expiresOn.getTime(), group.expiresOn.getTime()))
-          : undefined;
-    }
-    return {
-      accessToken,
-      expiresOn,
+    const vpnOnly: AuthOutcome = {
+      accessToken: result.accessToken,
+      expiresOn: result.expiresOn ?? undefined,
       account: result.account?.username,
       tenantId: result.tenantId,
       fromCache,
     };
+    if (!this.auth.enableGroupToken) return vpnOnly;
+
+    // The official client carries on with the VPN token when it cannot get a
+    // Graph token, and so does this. Refusing would break connections that work
+    // today, and nothing in OpenP2S could put them right, because Graph is only
+    // ever acquired silently. The caller reports the failure, so a default
+    // address pool does not come as a silent surprise.
+    try {
+      const group = await this.acquireGroupToken(result);
+      return {
+        ...vpnOnly,
+        accessToken: groupCredential(result.accessToken, group.accessToken),
+        expiresOn:
+          vpnOnly.expiresOn && group.expiresOn
+            ? new Date(Math.min(vpnOnly.expiresOn.getTime(), group.expiresOn.getTime()))
+            : undefined,
+      };
+    } catch (error) {
+      return { ...vpnOnly, groupTokenFailure: describeError(error) };
+    }
   }
 
   private async acquireGroupToken(result: AuthenticationResult): Promise<AuthenticationResult> {
@@ -495,9 +512,11 @@ export class EntraAuthenticator implements TokenSource {
     if (new URL(this.auth.authority).hostname !== 'login.microsoftonline.com') {
       throw new AuthError('group-token authentication currently supports Azure Public only');
     }
-    if (!result.account || result.tenantId !== this.auth.tenantId) {
+    if (!result.account || !isProfileTenant(this.auth.tenantId, result.tenantId)) {
       throw new AuthError('cannot bind the group token to the VPN account and tenant');
     }
+    // Silently only, as in the official client: a prompt here could pick a
+    // different identity from the VPN token's.
     let group: AuthenticationResult | null;
     try {
       group = await this.getClient().acquireTokenSilent({
@@ -505,12 +524,7 @@ export class EntraAuthenticator implements TokenSource {
         scopes: [GRAPH_SCOPE],
       });
     } catch (error) {
-      // Never fall back to a VPN-only token: it can connect successfully
-      // while silently placing the user in the gateway's default pool.
-      throw new AuthError('could not acquire the Microsoft Graph group token', {
-        cause: error,
-        hint: 'The profile requires group authentication. The same VPN application and account must be allowed to obtain a Microsoft Graph token.',
-      });
+      throw new AuthError('could not acquire the Microsoft Graph group token', { cause: error });
     }
     if (
       !group?.account ||
@@ -518,6 +532,8 @@ export class EntraAuthenticator implements TokenSource {
       group.account.homeAccountId !== result.account.homeAccountId ||
       group.tenantId !== result.tenantId
     ) {
+      // Stricter than the official client, which does not check. A token for
+      // someone else must never reach the gateway alongside this user's.
       throw new AuthError('Microsoft Graph did not return a token for the VPN account and tenant');
     }
     return group;
