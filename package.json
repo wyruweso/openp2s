@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24.13.0"
+    "node": ">=24.22.2"
   },
   "bin": {
     "openp2s": "./src/cli/run.ts"
