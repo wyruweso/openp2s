@@ -409,6 +409,11 @@ export class Connection {
     return this.tunnel?.details.failureReason;
   }
 
+  /** The gateway certificate's CN, once verified. */
+  get certificateName(): string | undefined {
+    return this.tunnel?.details.certificateName;
+  }
+
   get tlsCipher(): string | undefined {
     return this.tunnel?.details.tlsCipher;
   }

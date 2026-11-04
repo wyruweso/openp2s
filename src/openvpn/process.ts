@@ -54,6 +54,8 @@ export interface TunnelDetails {
   tlsCipher: string | undefined;
   /** Why it stopped, when we can name a reason. */
   failureReason: string | undefined;
+  /** The gateway certificate's CN, as `--verify-name` wants it. */
+  certificateName: string | undefined;
 }
 
 /**
@@ -131,6 +133,10 @@ const PATTERNS = {
   tlsStart: /TLS: Initial packet from|TLS: soft reset|VERIFY OK/,
   /** "VERIFY OK: depth=0, CN=..." - the leaf certificate verified. */
   certOk: /VERIFY OK: depth=0/,
+  /** The CN alone. Subject fields are comma-separated in this line. */
+  certName: /VERIFY OK: depth=0, (?:[^,]*, )*CN=([^,]+)/,
+  /** "VERIFY X509NAME ERROR: CN=actual, must be expected" */
+  certNameMismatch: /VERIFY X509NAME ERROR: (.*), must be /,
   /** key-method-2 accepted; the gateway took our credentials. */
   authOk: /Peer Connection Initiated|SENT CONTROL|PUSH: Received control message/,
   /** "TUN/TAP device tun0 opened" */
@@ -183,6 +189,7 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
     stage: 'start',
     tlsCipher: undefined,
     failureReason: undefined,
+    certificateName: undefined,
   };
 
   private process: SpawnedProcess | undefined;
@@ -352,6 +359,13 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
   private diagnose(): string | undefined {
     const tail = this.recentLines.join('\n');
 
+    const mismatch = PATTERNS.certNameMismatch.exec(tail);
+    if (mismatch) {
+      return (
+        `The gateway presented ${mismatch[1]}, which is not the name given to --verify-name. ` +
+        'Do not change the pin unless the gateway is known to have changed.'
+      );
+    }
     if (PATTERNS.authFailed.test(tail)) {
       return (
         'The gateway rejected the Entra access token (AUTH_FAILED). The token ' +
@@ -438,6 +452,8 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
     }
     if (PATTERNS.certOk.test(line)) {
       this.reachStage('cert');
+      const name = PATTERNS.certName.exec(line);
+      if (name?.[1]) this.details.certificateName = name[1].trim();
     }
     if (PATTERNS.authOk.test(line)) {
       this.reachStage('auth');
@@ -449,6 +465,14 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
         'the gateway reset the connection during the control-channel exchange';
     } else if (PATTERNS.tunPermission.test(line)) {
       this.details.failureReason ??= 'could not open the tun device (needs root)';
+    }
+
+    // OpenVPN treats this as a retryable TLS failure and would keep reconnecting
+    // to a server that cannot pass. A wrong certificate is not a transient fault.
+    if (PATTERNS.certNameMismatch.test(line)) {
+      this.details.failureReason = 'the gateway certificate does not match --verify-name';
+      void this.stop();
+      return;
     }
 
     const device = PATTERNS.device.exec(line);

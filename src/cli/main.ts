@@ -109,7 +109,7 @@ export function buildProgram(): Command {
     .option('--dns-domain <suffix...>', 'extra DNS suffixes to route over the VPN')
     .option(
       '--verify-name <name>',
-      'require this certificate name, e.g. "*.vpn.azure.com" (see docs/SECURITY.md)',
+      'require this certificate name, as `openp2s probe` reports it (see docs/SECURITY.md)',
     )
     .action(async (profile: string, options: Record<string, unknown>, command: Command) => {
       const code = await connectCommand(profile, {
