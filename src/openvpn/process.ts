@@ -376,7 +376,11 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
       );
     }
     if (/VERIFY ERROR/.test(tail)) {
-      return 'The gateway certificate failed validation. OpenP2S will not connect without a valid chain.';
+      return (
+        'The gateway certificate failed validation, and OpenP2S will not connect without ' +
+        'a valid certificate. If the gateway has moved to a certificate authority this ' +
+        'version does not know, update OpenP2S or pass the root with --ca.'
+      );
     }
     if (PATTERNS.tlsError.test(tail)) {
       return (

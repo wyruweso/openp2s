@@ -114,6 +114,11 @@ grep -qE '^verify-x509-name [^ ]+ name$' "$WORK/out.ovpn" \
   || die "the converted config does not check the certificate name"
 ok "checks the certificate name without being asked"
 
+# Nor does it depend on what this machine's trust store holds.
+grep -q '^<ca>$' "$WORK/out.ovpn" \
+  || die "the converted config does not embed the roots for an Azure gateway"
+ok "embeds the roots for an Azure gateway"
+
 # ---- doctor ---------------------------------------------------------------
 #
 # A CI runner has no /dev/net/tun and no systemd-resolved, so findings are

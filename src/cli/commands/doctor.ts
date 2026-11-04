@@ -14,7 +14,12 @@
  */
 
 import { existsSync } from 'node:fs';
-import { PINNED_ROOT_MESSAGE, pinnedRootSupport, resolveCaPath } from '../../openvpn/ca.ts';
+import {
+  PINNED_ROOT_MESSAGE,
+  pinnedRootSupport,
+  resolveCaPath,
+  usesBuiltInRoots,
+} from '../../openvpn/ca.ts';
 import { locateOpenVpnBinary } from '../../openvpn/binary.ts';
 import { isSystemdResolvedActive } from '../../network/systemdResolved.ts';
 import { toRoutingDomain } from '../../network/dns.ts';
@@ -158,24 +163,21 @@ async function environmentChecks(
         },
   );
 
+  // Only gateways outside vpn.azure.com depend on this: the roots for Azure
+  // gateways ship with OpenP2S. So a missing store is worth saying, but not a failure.
   try {
     const ca = resolveCaPath(options.ca);
-    checks.push(
-      ca.pinned
-        ? { status: 'ok', label: 'DigiCert Global Root G2 is available', detail: ca.path }
-        : {
-            status: 'warn',
-            label: 'using the whole system CA bundle',
-            detail: ca.path,
-            fix: "Install or update your distribution's CA certificates package.",
-          },
-    );
+    checks.push({
+      status: 'ok',
+      label: ca.pinned ? 'DigiCert Global Root G2 is available' : 'system CA bundle is available',
+      detail: ca.path,
+    });
   } catch (error) {
     checks.push({
-      status: 'fail',
+      status: 'warn',
       label: 'no system CA store found',
       detail: error instanceof Error ? error.message : undefined,
-      fix: "Install your distribution's CA certificates package.",
+      fix: "Only gateways outside vpn.azure.com need it. Install your distribution's CA certificates package.",
     });
   }
 
@@ -216,6 +218,10 @@ async function profileChecks(context: CommandContext, profile: AzureVpnProfile):
     });
   }
 
+  if (usesBuiltInRoots(profile.gateways)) {
+    checks.push({ status: 'ok', label: 'the roots for this gateway ship with OpenP2S' });
+  }
+
   if (pinnedRootSupport(profile) === 'unsupported') {
     // The profile asks for a stricter trust policy than OpenP2S implements.
     // Silently applying a weaker one, and calling it a warning, would be the
@@ -225,7 +231,7 @@ async function profileChecks(context: CommandContext, profile: AzureVpnProfile):
       status: 'fail',
       label: PINNED_ROOT_MESSAGE,
       fix:
-        'OpenP2S validates against the system trust store, which is weaker than\n' +
+        'OpenP2S does not validate against one specific root, which is weaker than\n' +
         '    what the profile asks for. Pass --allow-system-trust-store to connect\n' +
         '    anyway, accepting that policy.',
     });

@@ -140,7 +140,7 @@ async function runConnect(
     repoRoot: context.repoRoot,
     ...(options.openvpnBinary ? { override: options.openvpnBinary } : {}),
   });
-  const ca = resolveCaPath(options.ca);
+  const ca = resolveCaPath(options.ca, { gateways: profile.gateways });
   const certificateName = requireCertificateName(profile, options.verifyName);
 
   // A binary with no BUILDINFO beside it could be anything, including the
@@ -176,7 +176,7 @@ async function runConnect(
   if (pinnedRootSupport(profile, options) === 'overridden') {
     ui.warn(
       'this profile asks for pinned-root validation; --allow-system-trust-store ' +
-        'was given, so the system trust store is used instead',
+        "was given, so OpenP2S's usual certificate validation is used instead",
     );
   }
 
@@ -251,6 +251,7 @@ async function runConnect(
     paths,
     binary,
     caPath: ca.path,
+    ...(ca.inlinePem ? { inlineCa: ca.inlinePem } : {}),
     authenticator,
     dns: createDnsConfigurator(context),
     elevator: context.elevator,

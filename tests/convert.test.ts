@@ -132,6 +132,23 @@ describe('convert: what lands in the file', () => {
     assert.ok(!directives.some((line) => line.startsWith('management')));
   });
 
+  it('embeds the roots for an Azure gateway without being asked', async () => {
+    await convertCommand(FIXTURE, { output, quiet: true });
+    const config = readFileSync(output, 'utf8');
+    assert.match(config, /^<ca>$/m);
+    assert.equal(config.match(/-----BEGIN CERTIFICATE-----/g)?.length, 2);
+    assert.ok(!/^ca /m.test(config), 'it must not also name a CA file');
+  });
+
+  it('lets --ca replace the embedded roots', async () => {
+    const ca = join(workDir, 'root.pem');
+    writeFileSync(ca, 'not read unless inlined');
+    await convertCommand(FIXTURE, { output, quiet: true, ca });
+    const config = readFileSync(output, 'utf8');
+    assert.ok(!config.includes('<ca>'));
+    assert.ok(config.includes(`ca ${ca}`));
+  });
+
   it('checks the certificate name without being asked', async () => {
     await convertCommand(FIXTURE, { output, quiet: true });
     assert.match(readFileSync(output, 'utf8'), /^verify-x509-name \*\.vpn\.azure\.com name$/m);

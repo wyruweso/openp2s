@@ -136,12 +136,12 @@ export async function convertCommand(
   }
 
   const profile = await loadProfile(profilePath);
-  const ca = resolveCaPath(options.ca);
+  const ca = resolveCaPath(options.ca, { gateways: profile.gateways });
 
   // Inlining makes the config self-contained. A whole system bundle is large,
   // so say what is being embedded.
-  let inlineCa: string | undefined;
-  if (options.inlineCa) {
+  let inlineCa = ca.inlinePem;
+  if (options.inlineCa && !inlineCa) {
     try {
       inlineCa = await readFile(ca.path, 'utf8');
     } catch (error) {
@@ -229,7 +229,7 @@ export async function convertCommand(
     [
       'CA',
       inlineCa
-        ? `embedded (${ca.pinned ? 'single root' : 'system bundle'})`
+        ? `embedded (${ca.inlinePem ? 'the roots Azure gateways use' : ca.pinned ? 'single root' : 'system bundle'})`
         : `${ca.path} (host-specific; use --inline-ca to embed it)`,
     ],
     [

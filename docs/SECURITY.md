@@ -77,9 +77,19 @@ root still get it.
 
 Certificate verification is always on. There is no option to disable it.
 
-The gateway certificate is validated against your system trust store, and the
-peer must present a certificate marked for TLS server use. **No CA is ever
-read from the profile**, so a modified profile cannot introduce a trust anchor.
+For a gateway under `vpn.azure.com`, the certificate must chain to one of the
+two roots Azure gateways use, which ship with OpenP2S: DigiCert Global Root G2
+and DigiCert Global Root CA. For any other host it is validated against your
+system trust store. `--ca` replaces either. The peer must also present a
+certificate marked for TLS server use. **No CA is ever read from the profile**,
+so a modified profile cannot introduce a trust anchor.
+
+The roots ship with OpenP2S because system stores follow browser policy.
+DigiCert Global Root CA left browser trust in April 2026 and distributions are
+dropping it, while Azure gateways still use it. This has two costs: a
+distribution update cannot withdraw these roots, only an OpenP2S release can.
+And if Azure moves to another root, connecting fails until OpenP2S is updated or
+you pass `--ca`.
 
 OpenP2S also checks the certificate's name, because a trusted chain alone does
 not show that a certificate belongs to an Azure gateway. There is no option to
