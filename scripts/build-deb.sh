@@ -46,6 +46,16 @@ command -v dpkg-shlibdeps >/dev/null \
 
 VERSION="$(grep -E '^\s*"version"' "$REPO_ROOT/package.json" | head -1 | cut -d'"' -f4)"
 [ -n "$VERSION" ] || die "could not read the version from package.json"
+
+# Debian reads what follows a hyphen as a revision, so 0.3.0-rc.1 would sort after
+# 0.3.0 and apt would never upgrade to the release. A tilde sorts before anything.
+# Only the package's own version uses it: GitHub renames release assets with a
+# tilde, which would stop SHA256SUMS matching the file people download.
+DEB_VERSION="${VERSION/-/\~}"
+if [ "$DEB_VERSION" != "$VERSION" ]; then
+    dpkg --compare-versions "$DEB_VERSION" lt "${VERSION%%-*}" \
+        || die "pre-release $DEB_VERSION must sort before ${VERSION%%-*}"
+fi
 ARCH="$(dpkg --print-architecture)"
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
@@ -234,7 +244,7 @@ else
     CHANGELOG_DATE="$(date -R)"
 fi
 printf 'openp2s (%s) unstable; urgency=medium\n\n  * Release %s.\n\n -- Wyruweso <tseluiko.m@gmail.com>  %s\n' \
-    "$VERSION" "$VERSION" "$CHANGELOG_DATE" \
+    "$DEB_VERSION" "$VERSION" "$CHANGELOG_DATE" \
     | gzip -9n > "$STAGE/usr/share/doc/openp2s/changelog.gz"
 chmod 0644 "$STAGE/usr/share/doc/openp2s/changelog.gz"
 
@@ -268,7 +278,7 @@ BUILT_ON="$( (. /etc/os-release 2>/dev/null && printf '%s' "$PRETTY_NAME") || pr
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: openp2s
-Version: $VERSION
+Version: $DEB_VERSION
 Section: net
 Priority: optional
 Architecture: $ARCH
@@ -344,6 +354,8 @@ PKG_CLI_VERSION="$("$PKG_DIR/usr/bin/openp2s" --version 2>/dev/null)" \
     || die "the packaged CLI does not run"
 [ "$PKG_CLI_VERSION" = "$VERSION" ] \
     || die "the packaged CLI reports $PKG_CLI_VERSION, expected $VERSION"
+[ "$(dpkg-deb --field "$DEB" Version)" = "$DEB_VERSION" ] \
+    || die "the package does not declare version $DEB_VERSION"
 
 # The package must not claim to provide the system openvpn.
 FIELDS="$(dpkg-deb --field "$DEB" Provides Conflicts Replaces)" \
