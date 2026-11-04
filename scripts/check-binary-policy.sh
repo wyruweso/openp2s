@@ -20,7 +20,7 @@
 #     this script       checks the binary is that one, then trusts BUILDINFO
 #
 # The hash check is what makes the last step mean anything: without it,
-# "BUILDINFO says 4096" is a statement about a note sitting near a file. It
+# "BUILDINFO says 8192" is a statement about a note sitting near a file. It
 # also catches a binary modified after its hash was recorded.
 #
 # Usage: scripts/check-binary-policy.sh [--binary <path>] [--buildinfo <path>]
@@ -156,11 +156,15 @@ The shipped binary carries the compat patch; a build without it cannot serve
 ok "BUILDINFO agrees the compat patch is compiled in"
 
 USER_PASS_LEN="$(buildinfo user_pass_len)"
-[ "$USER_PASS_LEN" = "4096" ] || die "BUILDINFO reports USER_PASS_LEN=$USER_PASS_LEN, expected 4096"
-ok "USER_PASS_LEN is 4096"
+# Group-aware credentials contain two tokens; enforce the new exact bound.
+[ "$USER_PASS_LEN" = "8192" ] || die "BUILDINFO reports USER_PASS_LEN=$USER_PASS_LEN, expected 8192"
+ok "USER_PASS_LEN is 8192"
+TLS_CHANNEL_BUF_SIZE="$(buildinfo tls_channel_buf_size)"
+[ "$TLS_CHANNEL_BUF_SIZE" = "16384" ] || die "BUILDINFO reports TLS_CHANNEL_BUF_SIZE=$TLS_CHANNEL_BUF_SIZE, expected 16384"
+ok "TLS_CHANNEL_BUF_SIZE is 16384"
 
 # ---- 4. does that provenance hold up against the manifest? ---------------
-# What turns "BUILDINFO says 4096" into something worth believing. Run here so
+# What turns "BUILDINFO says 8192" into something worth believing. Run here so
 # this gate fails closed on its own rather than trusting the caller.
 printf '\n'
 scripts/verify-provenance.sh --binary "$BINARY" --buildinfo "$BUILDINFO" >/dev/null 2>&1 \

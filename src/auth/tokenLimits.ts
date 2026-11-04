@@ -1,7 +1,7 @@
 /**
  * Credential size limits.
  *
- * The patched OpenVPN raises USER_PASS_LEN from 128 to 4096, which is enough
+ * The patched OpenVPN raises USER_PASS_LEN from 128 to 8192, which is enough
  * for every Entra access token seen so far. "Enough so far" is not a
  * guarantee: tokens grow with group claims, and a user in many groups can get
  * a much larger one.
@@ -16,7 +16,10 @@
 import { AuthError } from '../errors.ts';
 
 /**
- * USER_PASS_LEN in the patched binary.
+ * USER_PASS_LEN to assume when no build has been measured.
+ *
+ * Lower than the current patch's 8192 on purpose: a low guess can only refuse a
+ * credential, while a high one could let OpenVPN truncate it.
  *
  * The buffer holds a NUL terminator, so the usable credential length is one
  * byte less. Overridable because the build records the real value in

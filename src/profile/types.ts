@@ -27,6 +27,8 @@ export interface EntraAuthConfig {
   readonly scope: string;
   /** Public client application id to authenticate as. */
   readonly clientId: string;
+  /** Request the Graph token required for Azure VPN group-based IP pools. */
+  readonly enableGroupToken?: boolean;
   /** <issuer> from the profile. Recorded for diagnostics; not used for auth. */
   readonly issuer?: string;
 }

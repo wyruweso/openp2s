@@ -132,6 +132,16 @@ describe('convert: what lands in the file', () => {
     assert.ok(!directives.some((line) => line.startsWith('management')));
   });
 
+  it('checks the certificate name without being asked', async () => {
+    await convertCommand(FIXTURE, { output, quiet: true });
+    assert.match(readFileSync(output, 'utf8'), /^verify-x509-name \*\.vpn\.azure\.com name$/m);
+  });
+
+  it('lets --verify-name replace the expected name', async () => {
+    await convertCommand(FIXTURE, { output, quiet: true, verifyName: 'gateway.example' });
+    assert.match(readFileSync(output, 'utf8'), /^verify-x509-name gateway\.example name$/m);
+  });
+
   it('names one when --credentials is given', async () => {
     await convertCommand(FIXTURE, { output, quiet: true, credentials: '/run/user/1000/creds' });
     assert.match(readFileSync(output, 'utf8'), /^auth-user-pass \/run\/user\/1000\/creds$/m);
