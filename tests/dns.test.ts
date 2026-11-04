@@ -73,9 +73,9 @@ describe('SystemdResolvedConfigurator.configure', () => {
     );
 
     assert.deepEqual(runner.commandLines, [
-      `${RESOLVECTL} dns tun0 10.10.0.4 10.10.0.5`,
-      `${RESOLVECTL} domain tun0 ~wvd.microsoft.com ~corp.contoso.example`,
       `${RESOLVECTL} default-route tun0 no`,
+      `${RESOLVECTL} domain tun0 ~wvd.microsoft.com ~corp.contoso.example`,
+      `${RESOLVECTL} dns tun0 10.10.0.4 10.10.0.5`,
     ]);
   });
 
@@ -86,8 +86,8 @@ describe('SystemdResolvedConfigurator.configure', () => {
     await makeConfigurator(runner).configure('tun0', ['10.10.0.4'], []);
 
     assert.deepEqual(runner.commandLines, [
-      `${RESOLVECTL} dns tun0 10.10.0.4`,
       `${RESOLVECTL} default-route tun0 no`,
+      `${RESOLVECTL} dns tun0 10.10.0.4`,
     ]);
   });
 
@@ -114,8 +114,8 @@ describe('SystemdResolvedConfigurator.configure', () => {
     await makeConfigurator(runner, 1000).configure('tun0', ['10.0.0.1'], []);
 
     assert.deepEqual(runner.commandLines, [
-      `sudo -- ${RESOLVECTL} dns tun0 10.0.0.1`,
       `sudo -- ${RESOLVECTL} default-route tun0 no`,
+      `sudo -- ${RESOLVECTL} dns tun0 10.0.0.1`,
     ]);
   });
 
@@ -123,11 +123,28 @@ describe('SystemdResolvedConfigurator.configure', () => {
     const runner = new RecordingCommandRunner();
     await makeConfigurator(runner).configure('tun0', ['10.0.0.1', '10.0.0.2'], []);
 
-    const call = runner.calls[0];
+    const call = runner.calls.find((candidate) => candidate.args[0] === 'dns');
     assert.ok(call);
     assert.deepEqual(call.args, ['dns', 'tun0', '10.0.0.1', '10.0.0.2']);
     for (const arg of call.args) {
       assert.ok(!arg.includes(' '), 'no argument should be a packed command string');
+    }
+  });
+
+  it('never gives a link servers it could not narrow first', async () => {
+    // Once a link has a server, resolved can send it queries. A failure earlier
+    // on must leave a link with none, not one taking every query on the machine.
+    for (const failing of ['default-route', 'domain']) {
+      const runner = new RecordingCommandRunner((_command, args) =>
+        args.includes(failing)
+          ? { code: 1, stdout: '', stderr: 'failed' }
+          : { code: 0, stdout: '', stderr: '' },
+      );
+      await assert.rejects(
+        () => makeConfigurator(runner).configure('tun0', ['10.0.0.1'], ['contoso.example']),
+        NetworkError,
+      );
+      assert.ok(!runner.commandLines.some((line) => line.includes(' dns ')), failing);
     }
   });
 
@@ -192,9 +209,9 @@ describe('~. is opt-in only', () => {
     });
 
     assert.deepEqual(runner.commandLines, [
-      `${RESOLVECTL} dns tun0 10.0.0.1`,
-      `${RESOLVECTL} domain tun0 ~.`,
       `${RESOLVECTL} default-route tun0 no`,
+      `${RESOLVECTL} domain tun0 ~.`,
+      `${RESOLVECTL} dns tun0 10.0.0.1`,
     ]);
   });
 
