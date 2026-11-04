@@ -66,8 +66,8 @@ exercised."
 ok "the installed CLI resolves the installed OpenVPN"
 
 # Without BUILDINFO beside it this reads "unknown" and `connect` refuses.
-grep -qE '^[[:space:]]*USER_PASS_LEN:[[:space:]]*4096$' "$WORK/compat.out" || die \
-"the installed OpenVPN does not report USER_PASS_LEN 4096.
+grep -qE '^[[:space:]]*USER_PASS_LEN:[[:space:]]*8192$' "$WORK/compat.out" || die \
+"the installed OpenVPN does not report USER_PASS_LEN 8192.
 Its BUILDINFO is missing or does not describe it, so OpenP2S treats its
 provenance as unknown and connect will refuse to use it."
 # Both patches, so the compat flag is available without a rebuild.
@@ -77,7 +77,7 @@ grep -qE '^[[:space:]]*Patch stack:[[:space:]]*long-credentials experimental-azu
 
 grep -qE '^[[:space:]]*experimental-azure-compat:[[:space:]]*compiled in' "$WORK/compat.out" \
     || die "the installed CLI does not report the compat option as available"
-ok "its provenance is intact (USER_PASS_LEN 4096, both shipped patches)"
+ok "its provenance is intact (USER_PASS_LEN 8192, both shipped patches)"
 
 # ---- the ordinary commands ------------------------------------------------
 "$OPENP2S" --version >/dev/null || die "openp2s --version failed"
@@ -108,6 +108,11 @@ grep -qE '^remote ' "$WORK/out.ovpn" || die "no remote directive"
 grep -q '<tls-auth>' "$WORK/out.ovpn" || die "no inline tls-auth key"
 grep -qE '^dev tun$' "$WORK/out.ovpn" || die "no tun device"
 ok "carries a remote, a tun device and the inline tls-auth key"
+
+# The profile is a standard Azure gateway, so no argument was needed for this.
+grep -qE '^verify-x509-name [^ ]+ name$' "$WORK/out.ovpn" \
+  || die "the converted config does not check the certificate name"
+ok "checks the certificate name without being asked"
 
 # ---- doctor ---------------------------------------------------------------
 #

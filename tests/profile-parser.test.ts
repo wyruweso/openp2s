@@ -115,6 +115,45 @@ describe('AzureProfileParser: well-formed profiles', () => {
     assert.equal(profile.gateway, 'azuregateway-mixed.vpn.azure.com');
   });
 
+  describe('DNS servers wrapped in <DnsServerEntry>', () => {
+    const withDnsServers = (inner: string): string => `<?xml version="1.0"?>
+<AzVpnProfile>
+  <fqdn>gw.vpn.azure.com</fqdn>
+  <tenant>https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555</tenant>
+  <audience>41b23e61-6c1e-4545-b367-cd054e0ed4b4</audience>
+  <serversecret>${'ab'.repeat(256)}</serversecret>
+  <clientconfig><dnsservers>${inner}</dnsservers></clientconfig>
+</AzVpnProfile>`;
+
+    it('reads one entry', () => {
+      const xml = withDnsServers(
+        '<DnsServerEntry><dnsserver>192.0.2.10</dnsserver></DnsServerEntry>',
+      );
+      assert.deepEqual(parser.parse(xml).dnsServers, ['192.0.2.10']);
+    });
+
+    it('reads several entries in order and removes duplicates', () => {
+      const xml = withDnsServers(`
+        <DnsServerEntry><dnsserver>192.0.2.10</dnsserver></DnsServerEntry>
+        <DnsServerEntry><dnsserver>192.0.2.11</dnsserver></DnsServerEntry>
+        <DnsServerEntry><dnsserver>192.0.2.10</dnsserver></DnsServerEntry>`);
+      assert.deepEqual(parser.parse(xml).dnsServers, ['192.0.2.10', '192.0.2.11']);
+    });
+
+    it('validates wrapped addresses like any other', () => {
+      const xml = withDnsServers(
+        '<DnsServerEntry><dnsserver>10.0.0.999</dnsserver></DnsServerEntry>',
+      );
+      assert.throws(() => parser.parse(xml), ProfileError);
+    });
+
+    it('ignores an entry with no server in it', () => {
+      for (const entry of ['<DnsServerEntry/>', '<DnsServerEntry>192.0.2.10</DnsServerEntry>']) {
+        assert.deepEqual(parser.parse(withDnsServers(entry)).dnsServers, []);
+      }
+    });
+  });
+
   it('deduplicates repeated DNS servers and routes', () => {
     const xml = `<?xml version="1.0"?>
 <AzVpnProfile>
@@ -358,5 +397,20 @@ describe('tenant and audience URL hygiene', () => {
       'https://vpn.example.com/.default',
     );
     assert.equal(validateAudience('api://11111111-2222-3333-4444-555555555555').kind, 'uri');
+  });
+});
+
+describe('group-token profile setting', () => {
+  it('is on only for exactly "true", as in the official client', () => {
+    const xml = fixture('azure-schema');
+    for (const value of ['true', 'True', 'TRUE', '1', 'false', '0', 'invalid', '']) {
+      const profile = parser.parse(
+        xml.replace(
+          '<enablegrouptoken>false</enablegrouptoken>',
+          `<enablegrouptoken>${value}</enablegrouptoken>`,
+        ),
+      );
+      assert.equal(profile.auth.enableGroupToken === true, value === 'true', value);
+    }
   });
 });

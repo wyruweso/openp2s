@@ -202,8 +202,8 @@ grep -q "openvpn-openp2s" <<<"$LOCATED" || die \
 "the bundled CLI did not find openvpn-openp2s beside itself.
 The portable bundle is meant to work in place; without sibling discovery it
 cannot. See locateOpenVpnBinary in src/openvpn/binary.ts."
-grep -q "USER_PASS_LEN: *4096" <<<"$LOCATED" \
-    || die "the bundled CLI does not report USER_PASS_LEN 4096 for its OpenVPN"
+grep -q "USER_PASS_LEN: *8192" <<<"$LOCATED" \
+    || die "the bundled CLI does not report USER_PASS_LEN 8192 for its OpenVPN"
 
 # ---------------------------------------------------------- publication ---
 if [ "$OUT" = "$DEFAULT_OUT" ]; then

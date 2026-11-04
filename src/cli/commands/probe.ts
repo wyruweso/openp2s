@@ -20,6 +20,7 @@ import { randomBytes } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { describeError, OpenP2SError, redact } from '../../errors.ts';
 import { locateOpenVpnBinary, type OpenVpnBinary } from '../../openvpn/binary.ts';
+import { resolveCertificateName } from '../../openvpn/certificateName.ts';
 import { resolveCaPath } from '../../openvpn/ca.ts';
 import { CONNECTION_STAGES, stageRank, type ConnectionStage } from '../../openvpn/process.ts';
 import type { DnsConfigurator } from '../../network/dns.ts';
@@ -53,6 +54,8 @@ export interface ProbeOptions extends GlobalOptions {
   /** Machine-readable output, for scripting. */
   readonly json?: boolean;
   readonly label?: string;
+  /** Require this certificate name instead of the one worked out from the host. */
+  readonly verifyName?: string;
 }
 
 const STAGE_LABELS: Record<ConnectionStage, string> = {
@@ -82,6 +85,10 @@ interface ProbeReport {
   /** PUSH_REPLY arrived - the only observable proof the token was accepted. */
   readonly authenticated: boolean;
   readonly tlsCipher: string | null;
+  /** The name this probe required, or null when it could not be worked out. */
+  readonly expectedCertificateName: string | null;
+  /** The name the gateway presented, once its certificate was verified. */
+  readonly certificateName: string | null;
   readonly failureReason: string | null;
   readonly error: string | null;
   /** What produced this result. No filesystem path, so it can be pasted. */
@@ -137,6 +144,8 @@ export async function probeCommand(
       credentialExchangeCompleted: false,
       authenticated: false,
       tlsCipher: null,
+      expectedCertificateName: null,
+      certificateName: null,
       failureReason: null,
       error: describeError(caught),
       openvpn: binary ? provenanceOf(binary) : null,
@@ -187,6 +196,17 @@ async function runProbe(
 
   const azureCompat = options.azureCompat ?? false;
 
+  // Unlike connect, a probe carries on without a name: it is how a user finds
+  // out what name a gateway outside the rule presents. So say what that costs.
+  const certificateName = resolveCertificateName(profile.gateways, options.verifyName);
+  if (!certificateName && !options.json) {
+    ui.warn(
+      `cannot work out the certificate name for ${profile.gateway}, so this probe accepts any ` +
+        'trusted certificate and sends it your Entra token. Check the name it reports before ' +
+        'trusting it',
+    );
+  }
+
   // Should not happen with the shipped binary, which carries the patch. See
   // the hint below.
   if (azureCompat && !binary.azureCompatAvailable) {
@@ -207,6 +227,7 @@ async function runProbe(
     ui.heading(`Probe: ${variant}`);
     ui.fields([
       ['Gateway', profile.gateway],
+      ['Certificate name', certificateName ?? 'unknown, not checked'],
       ['azure-compat', azureCompat ? 'on (OCC string + peer-info)' : 'off (default)'],
       ['Host changes', 'none: no tun, no routes, no DNS (enforced by the config)'],
     ]);
@@ -246,6 +267,7 @@ async function runProbe(
     // whether --experimental-azure-compat changed anything on the wire.
     // Noisy, but --verbose on a probe is an explicit request for detail.
     verb: ui.isVerbose ? 7 : 4,
+    ...(certificateName ? { verifyName: certificateName } : {}),
     credentialLimits: { userPassLen: binary.userPassLen },
     events: {
       onAuthenticated: (outcome) => {
@@ -290,6 +312,8 @@ async function runProbe(
       credentialExchangeCompleted,
       authenticated,
       tlsCipher: connection.tlsCipher ?? null,
+      expectedCertificateName: certificateName ?? null,
+      certificateName: connection.certificateName ?? null,
       failureReason: failureReason === undefined ? null : redact(failureReason),
       error: error ?? null,
       openvpn: provenanceOf(binary),
@@ -307,6 +331,7 @@ async function runProbe(
       CONNECTION_STAGES.map((s) => (stageRank(s) <= stageRank(stage) ? s : `(${s})`)).join(' -> '),
     ],
     ['TLS', connection.tlsCipher ?? 'not negotiated'],
+    ['Certificate', connection.certificateName ?? 'not verified'],
     // Two separate facts. The credential fitting through the control channel
     // is what the patch fixes; the gateway accepting it is a different
     // question, and PUSH_REPLY is the only evidence of it.
