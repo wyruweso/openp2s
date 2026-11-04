@@ -117,6 +117,8 @@ export class Connection {
   private tunnel: OpenVpnProcess | undefined;
   private management: ManagementServer | undefined;
   private cleanedUp = false;
+  private pendingReconnect: TunnelDetails | undefined;
+  private handlingReconnect = false;
   private readonly established: EstablishedState = { dnsConfigured: false };
   /** Set when a teardown could not finish; the caller must not forget us. */
   private teardownIncomplete = false;
@@ -287,12 +289,7 @@ export class Connection {
       ownerPid: process.pid,
       interfaceName: details.interfaceName,
       assignedAddress: details.assignedAddress,
-      dnsServers: dnsApplied ? profile.dnsServers : [],
-      dnsDomains: dnsApplied
-        ? this.options.dnsAllDomains
-          ? ['.']
-          : [...profile.dnsSuffixes, ...(this.options.extraDnsDomains ?? [])]
-        : [],
+      ...this.dnsFields(dnsApplied),
       pushedRoutes: details.pushedRoutes,
       includeRoutes: profile.includeRoutes.map((route) => route.cidr),
       account: outcome.account,
@@ -317,7 +314,7 @@ export class Connection {
       events?.onWarning?.('the tunnel dropped; OpenVPN is reconnecting');
     });
     tunnel.on('reconnected', (current) => {
-      void this.handleReconnect(current, record);
+      this.queueReconnect(current);
     });
 
     return record;
@@ -362,33 +359,117 @@ export class Connection {
     return true;
   }
 
+  /** What the session record says about DNS, given whether it was applied. */
+  private dnsFields(applied: boolean): Pick<SessionRecord, 'dnsServers' | 'dnsDomains'> {
+    const { profile, dnsAllDomains, extraDnsDomains } = this.options;
+    return {
+      dnsServers: applied ? profile.dnsServers : [],
+      dnsDomains: applied
+        ? dnsAllDomains
+          ? ['.']
+          : [...profile.dnsSuffixes, ...(extraDnsDomains ?? [])]
+        : [],
+    };
+  }
+
+  /**
+   * Change the session record, unless it is no longer this process's to change.
+   *
+   * `openp2s disconnect` in another terminal stamps the record and then removes
+   * it. A record that has gone must not come back, and a stamped one must keep
+   * its stamp. The stamp could still land between this read and write, because
+   * nothing locks the file across processes, but the window is very small.
+   */
+  private async updateSession(changes: Partial<SessionRecord>): Promise<boolean> {
+    if (this.cleanedUp) return false;
+    const current = await this.session.read();
+    if (!current || current.disconnectRequestedAt) return false;
+    await this.session.write({ ...current, ...changes });
+    return true;
+  }
+
+  /**
+   * Handle reconnects one at a time, keeping only the newest that is waiting.
+   *
+   * On an unstable network OpenVPN can come back again while sudo is still
+   * configuring DNS for the last attempt. Run side by side, whichever finished
+   * last would decide what the record says. The details are copied because
+   * OpenVpnProcess goes on changing its own.
+   */
+  private queueReconnect(details: TunnelDetails): void {
+    this.pendingReconnect = { ...details };
+    if (this.handlingReconnect) return;
+    this.handlingReconnect = true;
+    void this.drainReconnects();
+  }
+
+  private async drainReconnects(): Promise<void> {
+    while (this.pendingReconnect) {
+      const details = this.pendingReconnect;
+      this.pendingReconnect = undefined;
+      await this.handleReconnect(details);
+    }
+    this.handlingReconnect = false;
+  }
+
   /**
    * Restore what a reconnect lost. Never throws: this runs from an event, and
-   * the tunnel is up either way. A DNS failure is reported loudly, because
-   * private names then silently resolve through public DNS.
+   * the tunnel is up either way.
+   *
+   * The tunnel's new details go in the record first, whatever then happens with
+   * DNS, because `status` and `disconnect` rely on them. A DNS failure is reported
+   * loudly, because private names then silently resolve through public DNS.
    */
-  private async handleReconnect(details: TunnelDetails, record: SessionRecord): Promise<void> {
-    if (this.cleanedUp) return;
+  private async handleReconnect(details: TunnelDetails): Promise<void> {
     const events = this.options.events;
 
     try {
-      await this.applyDns(details);
-      if (this.cleanedUp) return;
-      // Re-read: `openp2s disconnect` may have stamped its request on the record.
-      const current = (await this.session.read()) ?? record;
-      await this.session.write({
-        ...current,
+      const updated = await this.updateSession({
         interfaceName: details.interfaceName,
         assignedAddress: details.assignedAddress,
         pushedRoutes: details.pushedRoutes,
       });
-      events?.onReconnected?.(details);
+      if (!updated) return;
     } catch (error) {
+      // Restoring DNS matters more than the record, so carry on.
       events?.onWarning?.(
-        `the tunnel reconnected but VPN DNS could not be restored: ${describeError(error)}. ` +
-          'Private names will not resolve correctly. Press Ctrl+C and connect again.',
+        `the tunnel reconnected but the session record could not be updated: ${describeError(error)}`,
       );
     }
+
+    // The old link has gone, and resolved dropped its settings with it. Until DNS
+    // is applied to the new one there is nothing here for a teardown to revert.
+    this.established.dnsConfigured = false;
+    if (details.interfaceName) this.established.interfaceName = details.interfaceName;
+
+    let applied = false;
+    let failure: unknown;
+    try {
+      applied = await this.applyDns(details);
+    } catch (error) {
+      failure = error;
+    }
+
+    // A newer reconnect is waiting, so this link has gone too. Whether it could be
+    // configured no longer matters, and the newer one will set the record straight.
+    if (this.pendingReconnect) return;
+
+    try {
+      await this.updateSession(this.dnsFields(applied));
+    } catch (error) {
+      events?.onWarning?.(
+        `the tunnel reconnected but the session record could not be updated: ${describeError(error)}`,
+      );
+    }
+
+    if (failure !== undefined) {
+      events?.onWarning?.(
+        `the tunnel reconnected but VPN DNS could not be restored: ${describeError(failure)}. ` +
+          'Private names will not resolve correctly. Press Ctrl+C and connect again.',
+      );
+      return;
+    }
+    events?.onReconnected?.(details);
   }
 
   /**
