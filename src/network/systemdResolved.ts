@@ -70,17 +70,19 @@ export class SystemdResolvedConfigurator implements DnsConfigurator {
     const routingDomains = options.allDomains ? [ALL_DOMAINS] : toRoutingDomains(domains);
 
     try {
-      await this.resolvectlRun(['dns', interfaceName, ...dnsServers]);
+      // Unconditional: even with no suffixes to route, this link must never
+      // become the machine's default resolver.
+      await this.resolvectlRun(['default-route', interfaceName, 'no']);
 
       if (routingDomains.length > 0) {
         await this.resolvectlRun(['domain', interfaceName, ...routingDomains]);
       }
 
-      // Unconditional, and last: even with no suffixes to route, this link
-      // must never become the machine's default resolver. Issuing it after
-      // the others means a failure part-way through still leaves the link
-      // narrower than the system default rather than wider.
-      await this.resolvectlRun(['default-route', interfaceName, 'no']);
+      // Servers last. Once a link has one, resolved can send it queries, so
+      // everything that limits which queries has to be in place first. A failure
+      // part-way through then leaves a link with no servers, which nothing is sent
+      // to. Done the other way round, it could leave one taking every query.
+      await this.resolvectlRun(['dns', interfaceName, ...dnsServers]);
     } catch (error) {
       throw new NetworkError(`failed to configure DNS on ${interfaceName}`, {
         cause: error,
