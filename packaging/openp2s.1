@@ -154,8 +154,9 @@ On either path the token never appears in argv or in the environment, and
 never in the generated OpenVPN configuration.
 .PP
 Certificate verification is never disabled: there is no option to turn it off,
-the gateway certificate is always validated against the system trust store,
-and no CA is ever read from the profile.
+the gateway certificate is always validated, against the roots Azure gateways
+use, which ship with OpenP2S, or against the system trust store for other hosts.
+No CA is ever read from the profile.
 .PP
 The gateway certificate's name is always checked, and there is no option to
 turn that off either. The expected name is worked out from the gateway

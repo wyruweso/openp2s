@@ -61,6 +61,8 @@ export interface ConnectionOptions {
   readonly paths: OpenP2SPaths;
   readonly binary: OpenVpnBinary;
   readonly caPath: string;
+  /** Roots to embed in the config instead of naming caPath. */
+  readonly inlineCa?: string;
   readonly authenticator: TokenSource;
   readonly dns: DnsConfigurator;
   readonly elevator: Elevator;
@@ -232,6 +234,7 @@ export class Connection {
       profile,
       credentials,
       caPath: this.options.caPath,
+      ...(this.options.inlineCa ? { inlineCa: this.options.inlineCa } : {}),
       verb: this.options.verb ?? 3,
       verifyName: this.options.verifyName,
       ...(this.options.azureCompat !== undefined ? { azureCompat: this.options.azureCompat } : {}),

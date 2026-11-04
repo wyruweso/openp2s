@@ -180,7 +180,7 @@ async function runProbe(
     repoRoot: context.repoRoot,
     ...(options.openvpnBinary ? { override: options.openvpnBinary } : {}),
   });
-  const ca = resolveCaPath(options.ca);
+  const ca = resolveCaPath(options.ca, { gateways: profile.gateways });
   observe(binary, ca.pinned);
 
   if (!binary.provenanceKnown && !options.json) {
@@ -251,6 +251,7 @@ async function runProbe(
     paths,
     binary,
     caPath: ca.path,
+    ...(ca.inlinePem ? { inlineCa: ca.inlinePem } : {}),
     authenticator,
     dns: NO_DNS,
     // Second layer only: the config is what makes the run non-mutating.

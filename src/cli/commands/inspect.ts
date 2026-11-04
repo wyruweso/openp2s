@@ -116,17 +116,19 @@ export async function inspectCommand(
 
   // CA resolution can fail, but inspect should still be useful when it does.
   try {
-    const ca = resolveCaPath(options.ca);
+    const ca = resolveCaPath(options.ca, { gateways: profile.gateways });
     ui.fields([
       ['CA certificate', ca.path],
       [
         'CA scope',
-        ca.pinned
-          ? 'pinned to a single root certificate'
-          : // Not a claim about the trust store's contents: OpenP2S only looked
-            // for a standalone PEM at known paths. The root is very likely
-            // inside the bundle.
-            'system trust bundle',
+        ca.inlinePem
+          ? 'the roots Azure gateways use'
+          : ca.pinned
+            ? 'pinned to a single root certificate'
+            : // Not a claim about the trust store's contents: OpenP2S only looked
+              // for a standalone PEM at known paths. The root is very likely
+              // inside the bundle.
+              'system trust bundle',
       ],
     ]);
   } catch (error) {

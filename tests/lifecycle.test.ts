@@ -153,6 +153,7 @@ interface BuildOptions {
   /** Overrides the token the fake authenticator returns. */
   readonly accessToken?: string;
   readonly verifyName?: string;
+  readonly inlineCa?: string;
 }
 
 function build(options: BuildOptions = {}): {
@@ -187,6 +188,7 @@ function build(options: BuildOptions = {}): {
     ...(options.useCredentialsFile ? { useCredentialsFile: true } : {}),
     ...(options.skipDns ? { skipDns: true } : {}),
     ...(options.verifyName ? { verifyName: options.verifyName } : {}),
+    ...(options.inlineCa ? { inlineCa: options.inlineCa } : {}),
     events: { onWarning: (message) => warnings.push(message) },
   });
 
@@ -243,6 +245,17 @@ describe('lifecycle: group tokens', () => {
       ),
       `expected a group-token warning, got ${JSON.stringify(warnings)}`,
     );
+    await connection.disconnect();
+  });
+});
+
+describe('lifecycle: certificate authority', () => {
+  it('hands roots that ship with OpenP2S to OpenVPN in the config', async () => {
+    const { connection } = build({ inlineCa: 'INLINE-ROOTS' });
+    await connection.connect();
+    const config = readFileSync(paths.configFile, 'utf8');
+    assert.ok(config.includes('<ca>\nINLINE-ROOTS\n</ca>'));
+    assert.ok(!/^ca /m.test(config), 'it must not also name a CA file');
     await connection.disconnect();
   });
 });
