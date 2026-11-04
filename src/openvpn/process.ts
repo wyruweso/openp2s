@@ -362,8 +362,10 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
     const mismatch = PATTERNS.certNameMismatch.exec(tail);
     if (mismatch) {
       return (
-        `The gateway presented ${mismatch[1]}, which is not the name given to --verify-name. ` +
-        'Do not change the pin unless the gateway is known to have changed.'
+        `The gateway presented ${mismatch[1]}, which is not the expected certificate name. ` +
+        'Some gateways, such as Virtual WAN, present a name OpenP2S cannot work out: if the ' +
+        'CN ends in .vpn.azure.com, pass that CN with --verify-name. Any other name may mean ' +
+        'this is not your gateway, so check with your VPN administrator before accepting it.'
       );
     }
     if (PATTERNS.authFailed.test(tail)) {
@@ -469,8 +471,11 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
 
     // OpenVPN treats this as a retryable TLS failure and would keep reconnecting
     // to a server that cannot pass. A wrong certificate is not a transient fault.
-    if (PATTERNS.certNameMismatch.test(line)) {
-      this.details.failureReason = 'the gateway certificate does not match --verify-name';
+    const mismatch = PATTERNS.certNameMismatch.exec(line);
+    if (mismatch) {
+      // Named here as well as in the hint: a probe reports this reason, and it is
+      // how a user finds the name to pass to --verify-name.
+      this.details.failureReason = `the gateway presented ${mismatch[1]}, not the expected certificate name`;
       void this.stop();
       return;
     }
