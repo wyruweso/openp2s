@@ -393,6 +393,16 @@ describe('doctor: live state that is not a DNS problem', () => {
     assert.equal(check(checks, /DNS servers are attached/).status, 'ok');
   });
 
+  it('reports DNS lost in a reconnect, rather than skipping the checks', async () => {
+    const { context } = liveContext({ interfaceExists: true, status: HEALTHY_STATUS });
+    await writeLiveSession({ dnsServers: [], dnsFailure: 'sudo: a password is required' });
+    const checks = await liveChecks(context, undefined, undefined);
+    const failure = check(checks, /could not be restored/);
+    assert.equal(failure.status, 'fail');
+    assert.match(failure.detail ?? '', /password is required/);
+    assert.ok(!checks.some((entry) => /no DNS was configured/.test(entry.label)));
+  });
+
   it('skips DNS checks entirely when the connection configured none', async () => {
     const { context } = liveContext({ interfaceExists: true, status: HEALTHY_STATUS });
     await writeLiveSession({ dnsServers: [] });

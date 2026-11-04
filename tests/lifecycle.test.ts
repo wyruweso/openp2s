@@ -975,6 +975,7 @@ describe('a tunnel that drops and comes back', () => {
     assert.equal(record?.interfaceName, 'tun1', 'status and disconnect rely on this');
     assert.equal(record?.assignedAddress, '172.16.0.9');
     assert.deepEqual(record?.dnsServers, [], 'the record must not claim DNS it does not have');
+    assert.match(record?.dnsFailure ?? '', /resolved said no/, 'doctor reports this');
 
     await connection.disconnect();
     assert.deepEqual(dns.reverted, [], 'nothing was applied to the new link');
@@ -1000,6 +1001,7 @@ describe('a tunnel that drops and comes back', () => {
       });
       return servers.length > 0;
     });
+    assert.equal((await store.read())?.dnsFailure, undefined, 'the failure is over');
 
     await connection.disconnect();
     assert.deepEqual(dns.reverted, ['tun2']);

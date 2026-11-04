@@ -455,7 +455,10 @@ export class Connection {
     if (this.pendingReconnect) return;
 
     try {
-      await this.updateSession(this.dnsFields(applied));
+      await this.updateSession({
+        ...this.dnsFields(applied),
+        dnsFailure: failure === undefined ? undefined : describeError(failure),
+      });
     } catch (error) {
       events?.onWarning?.(
         `the tunnel reconnected but the session record could not be updated: ${describeError(error)}`,
