@@ -45,6 +45,12 @@ could select a different identity. If it cannot get one, it connects with the VP
 token alone, which is also what the client does, and the gateway may then assign
 its default address pool. OpenP2S warns when this happens.
 
+A reconnect is stricter. A live session keeps the account and the kind of
+credential it started with, because a change could move the user to another
+address pool with nobody watching. If it can't, OpenVPN stops and the user is asked
+to connect again. The client falls back here too, so this is a deliberate
+difference.
+
 A Graph token is only sent to a gateway whose certificate name is checked; see
 [SECURITY.md](SECURITY.md).
 
