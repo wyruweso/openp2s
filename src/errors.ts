@@ -108,6 +108,9 @@ function keepDigest(match: string, label: string): string {
 }
 
 const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, Replacement]> = [
+  // A TLV prefix is adjacent to each JWT, so the ordinary JWT word-boundary
+  // pattern cannot safely redact its contents. Redact the envelope first.
+  [/TlvToken:[^\s"'<>]+/g, `${REDACTED}-group-credential`],
   // JWTs: three base64url segments. Entra access and ID tokens.
   [/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, `${REDACTED}-jwt`],
   // OpenVPN management commands, which carry credentials by design.

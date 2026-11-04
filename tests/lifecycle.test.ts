@@ -9,11 +9,13 @@
  */
 
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { AuthOutcome, TokenSource } from '../src/auth/entra.ts';
+import type { AuthOutcome, SessionCredential, TokenSource } from '../src/auth/entra.ts';
 import { AuthError, NetworkError, TunnelError } from '../src/errors.ts';
 import type { DnsConfigurator } from '../src/network/dns.ts';
 import type { OpenVpnBinary } from '../src/openvpn/binary.ts';
@@ -42,16 +44,27 @@ const USER: UserIdentity = {
 
 class FakeTokenSource implements TokenSource {
   calls = 0;
+  silentCalls = 0;
+  lastSession: SessionCredential | undefined;
   private readonly outcome: AuthOutcome | Error;
+  private readonly renewal: AuthOutcome | Error;
 
-  constructor(outcome: AuthOutcome | Error) {
+  constructor(outcome: AuthOutcome | Error, renewal: AuthOutcome | Error = outcome) {
     this.outcome = outcome;
+    this.renewal = renewal;
   }
 
   async acquireToken(): Promise<AuthOutcome> {
     this.calls += 1;
     if (this.outcome instanceof Error) throw this.outcome;
     return this.outcome;
+  }
+
+  async acquireTokenSilently(session: SessionCredential): Promise<AuthOutcome> {
+    this.silentCalls += 1;
+    this.lastSession = session;
+    if (this.renewal instanceof Error) throw this.renewal;
+    return this.renewal;
   }
 }
 
@@ -93,6 +106,7 @@ function successOutcome(): AuthOutcome {
     account: 'user@contoso.example',
     tenantId: '11111111-2222-3333-4444-555555555555',
     fromCache: true,
+    homeAccountId: 'home-1',
   };
 }
 
@@ -138,6 +152,8 @@ interface BuildOptions {
   readonly credentialLimits?: { readonly userPassLen: number };
   /** Overrides the token the fake authenticator returns. */
   readonly accessToken?: string;
+  readonly verifyName?: string;
+  readonly inlineCa?: string;
 }
 
 function build(options: BuildOptions = {}): {
@@ -171,6 +187,8 @@ function build(options: BuildOptions = {}): {
     ...(options.azureCompat ? { azureCompat: true } : {}),
     ...(options.useCredentialsFile ? { useCredentialsFile: true } : {}),
     ...(options.skipDns ? { skipDns: true } : {}),
+    ...(options.verifyName ? { verifyName: options.verifyName } : {}),
+    ...(options.inlineCa ? { inlineCa: options.inlineCa } : {}),
     events: { onWarning: (message) => warnings.push(message) },
   });
 
@@ -191,6 +209,167 @@ function assertNoSecretsLeftBehind(): void {
   assert.ok(!existsSync(paths.configFile), 'generated config must be removed');
   assert.ok(!existsSync(paths.managementSocket), 'management socket must be removed');
 }
+
+describe('lifecycle: group tokens', () => {
+  const withGroupToken = (): AzureVpnProfile => ({
+    ...profile,
+    auth: { ...profile.auth, enableGroupToken: true },
+  });
+
+  it('are not sent to a gateway whose certificate name is unchecked', async () => {
+    const { connection, spawner } = build({ profile: withGroupToken() });
+    await assert.rejects(connection.connect(), /no certificate name to check/);
+    assert.equal(spawner.spawnCount, 0, 'OpenVPN must not start');
+  });
+
+  it('are allowed once the name is checked', async () => {
+    const { connection, spawner } = build({
+      profile: withGroupToken(),
+      verifyName: '*.vpn.azure.com',
+    });
+    await connection.connect();
+    assert.equal(spawner.spawnCount, 1);
+    await connection.disconnect();
+  });
+
+  it('say so when the connection has to use the VPN token alone', async () => {
+    const { connection, warnings } = build({
+      profile: withGroupToken(),
+      verifyName: '*.vpn.azure.com',
+      auth: new FakeTokenSource({ ...successOutcome(), groupTokenFailure: 'consent required' }),
+    });
+    await connection.connect();
+    assert.ok(
+      warnings.some(
+        (warning) => /VPN token alone/.test(warning) && /consent required/.test(warning),
+      ),
+      `expected a group-token warning, got ${JSON.stringify(warnings)}`,
+    );
+    await connection.disconnect();
+  });
+});
+
+describe('lifecycle: certificate authority', () => {
+  it('hands roots that ship with OpenP2S to OpenVPN in the config', async () => {
+    const { connection } = build({ inlineCa: 'INLINE-ROOTS' });
+    await connection.connect();
+    const config = readFileSync(paths.configFile, 'utf8');
+    assert.ok(config.includes('<ca>\nINLINE-ROOTS\n</ca>'));
+    assert.ok(!/^ca /m.test(config), 'it must not also name a CA file');
+    await connection.disconnect();
+  });
+});
+
+describe('lifecycle: credential requests on a reconnect', () => {
+  /** Plays OpenVPN's side of the management socket. */
+  async function openVpnSide(): Promise<{
+    received: string[];
+    ask: () => void;
+    until: (done: () => boolean) => Promise<void>;
+    close: () => void;
+  }> {
+    const socket = createConnection(paths.managementSocket);
+    await once(socket, 'connect');
+    const received: string[] = [];
+    let partial = '';
+    socket.on('data', (chunk) => {
+      const lines = (partial + chunk.toString()).split('\n');
+      partial = lines.pop() ?? '';
+      received.push(...lines);
+    });
+    return {
+      received,
+      ask: () => socket.write(">PASSWORD:Need 'Auth' username/password\n"),
+      until: async (done) => {
+        const deadline = Date.now() + 2_000;
+        while (!done()) {
+          assert.ok(Date.now() < deadline, `timed out; received ${JSON.stringify(received)}`);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      },
+      close: () => socket.destroy(),
+    };
+  }
+
+  const answers = (lines: readonly string[]): number =>
+    lines.filter((line) => line === 'END').length;
+
+  it('renews the token silently, and never starts a sign-in', async () => {
+    const auth = new FakeTokenSource(successOutcome());
+    const { connection } = build({ auth });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    assert.equal(auth.silentCalls, 0, 'the first request uses the token from connect');
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 2);
+    assert.equal(auth.silentCalls, 1);
+    assert.equal(auth.calls, 1, 'only connect may start a sign-in');
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+
+  it('renews for the account and credential the session started with', async () => {
+    const auth = new FakeTokenSource({ ...successOutcome(), groupToken: true });
+    const { connection } = build({ auth });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 2);
+
+    assert.equal(auth.lastSession?.homeAccountId, 'home-1');
+    assert.equal(auth.lastSession?.groupToken, true);
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+
+  it('stops OpenVPN and says why when the session cannot be renewed', async () => {
+    const auth = new FakeTokenSource(successOutcome(), new AuthError('sign-in required'));
+    const { connection, warnings } = build({ auth });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    openVpn.ask();
+    await openVpn.until(() => openVpn.received.includes('signal SIGTERM'));
+
+    assert.equal(answers(openVpn.received), 1, 'the old token must not be sent again');
+    assert.ok(warnings.some((warning) => /run connect again/.test(warning)));
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+
+  it('holds a renewed token to the same size limit as the first', async () => {
+    const auth = new FakeTokenSource(successOutcome(), {
+      ...successOutcome(),
+      accessToken: 'x'.repeat(5_000),
+    });
+    const { connection, warnings } = build({ auth, credentialLimits: { userPassLen: 4096 } });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    openVpn.ask();
+    await openVpn.until(() => openVpn.received.includes('signal SIGTERM'));
+
+    assert.equal(answers(openVpn.received), 1, 'an oversized token must not be sent');
+    assert.ok(warnings.some((warning) => /5000 bytes/.test(warning)));
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+});
 
 describe('lifecycle: successful connection', () => {
   it('brings the tunnel up and records the session', async () => {

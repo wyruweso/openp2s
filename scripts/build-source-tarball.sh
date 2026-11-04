@@ -102,8 +102,8 @@ What was changed
 
 long-credentials.patch changes two constants and nothing else:
 
-  USER_PASS_LEN         128  -> 4096   (src/openvpn/misc.h)
-  TLS_CHANNEL_BUF_SIZE  2048 -> 8192   (src/openvpn/common.h)
+  USER_PASS_LEN         128  -> 8192   (src/openvpn/misc.h)
+  TLS_CHANNEL_BUF_SIZE  2048 -> 16384  (src/openvpn/common.h)
 
 Every line it touches is asserted by scripts/check-patch-policy.sh in the
 OpenP2S repository.
