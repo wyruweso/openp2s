@@ -90,6 +90,14 @@ mode 0600.
 .I /usr/lib/openp2s/openvpn
 The patched OpenVPN binary.
 .SH AUTHENTICATION
+Profiles enabling group tokens also acquire a Microsoft Graph access token
+for the same account and tenant. Both are sent to the gateway in its TLV
+credential format, and only to a gateway whose certificate name is checked.
+Group authentication supports Azure Public; existing Graph consent is required.
+If no group token can be obtained, OpenP2S warns and connects with the VPN token
+alone, so the gateway may assign its default address pool. The combined
+credential is subject to the OpenVPN size limit.
+.PP
 Sign-in uses the browser authorization-code flow with PKCE: OpenP2S opens a
 Microsoft sign-in page and listens briefly on 127.0.0.1 for the reply. The
 authorization code is bound to a one-time verifier generated locally, so an

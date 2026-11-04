@@ -399,3 +399,18 @@ describe('tenant and audience URL hygiene', () => {
     assert.equal(validateAudience('api://11111111-2222-3333-4444-555555555555').kind, 'uri');
   });
 });
+
+describe('group-token profile setting', () => {
+  it('is on only for exactly "true", as in the official client', () => {
+    const xml = fixture('azure-schema');
+    for (const value of ['true', 'True', 'TRUE', '1', 'false', '0', 'invalid', '']) {
+      const profile = parser.parse(
+        xml.replace(
+          '<enablegrouptoken>false</enablegrouptoken>',
+          `<enablegrouptoken>${value}</enablegrouptoken>`,
+        ),
+      );
+      assert.equal(profile.auth.enableGroupToken === true, value === 'true', value);
+    }
+  });
+});

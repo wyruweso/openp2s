@@ -29,10 +29,10 @@ DEFAULT_VERSION=2.7.6
 2.7.6.commit=327a33de2aa21883f3d206774c1d0801b244fce6
 
 # Always applied. The entire production diff: two buffer sizes, nothing else.
-#   USER_PASS_LEN         128  -> 4096
-#   TLS_CHANNEL_BUF_SIZE  2048 -> 8192
+#   USER_PASS_LEN         128  -> 8192
+#   TLS_CHANNEL_BUF_SIZE  2048 -> 16384
 2.7.6.patch.long_credentials=patches/2.7.6/long-credentials.patch
-2.7.6.patch.long_credentials_sha256=755b9d2fb67d44a1d5cab6caa84bc2a32980ffec4e7a58cb3c5b783f95bed52c
+2.7.6.patch.long_credentials_sha256=a0a934656b95c9f5d1b6ee0900a1f0e925cadf005d37064f83d639ddeb5279a4
 
 # Always applied, but inert. Adds the --experimental-azure-compat option: the
 # Azure OCC options string and peer-info. Measurement showed the gateway we
@@ -49,8 +49,8 @@ DEFAULT_VERSION=2.7.6
 # repeating them: build-openvpn.sh asserts the patched source really says
 # these, and openp2s reads user_pass_len to reject a token OpenVPN would
 # silently truncate.
-2.7.6.user_pass_len=4096
-2.7.6.tls_channel_buf_size=8192
+2.7.6.user_pass_len=8192
+2.7.6.tls_channel_buf_size=16384
 
 # The resulting binary hash is not pinned: OpenVPN's autotools build is not
 # bit-reproducible across toolchains. build-openvpn.sh records what it
