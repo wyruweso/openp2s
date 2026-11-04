@@ -735,11 +735,19 @@ describe('flow-specific failure hints', () => {
   });
 });
 
-describe('renewing a token for a reconnect', () => {
+describe('renewing a credential for a reconnect', () => {
+  const OTHER = {
+    ...ACCOUNT,
+    homeAccountId: 'another-user',
+    username: 'other@contoso.example',
+  };
+  const SESSION = { homeAccountId: ACCOUNT.homeAccountId };
+  const GROUP_AUTH = { ...AUTH, enableGroupToken: true };
+
   it('returns a current token without prompting', async () => {
     msal.accounts = [ACCOUNT];
     msal.silent = authResult();
-    const result = await authenticator().acquireTokenSilently();
+    const result = await authenticator().acquireTokenSilently(SESSION);
     assert.equal(result.accessToken, TOKEN);
     assert.equal(msal.deviceCodeRequests.length, 0);
     assert.equal(msal.interactiveRequests.length, 0);
@@ -749,19 +757,95 @@ describe('renewing a token for a reconnect', () => {
     for (const flow of ['browser', 'device-code'] as const) {
       msal.accounts = [ACCOUNT];
       msal.silent = new Error('interaction_required');
-      await assert.rejects(authenticator(AUTH, msal, flow).acquireTokenSilently(), AuthError);
+      await assert.rejects(
+        authenticator(AUTH, msal, flow).acquireTokenSilently(SESSION),
+        AuthError,
+      );
     }
     assert.equal(msal.deviceCodeRequests.length, 0);
     assert.equal(msal.interactiveRequests.length, 0);
   });
 
-  it('reports a group token it could not renew', async () => {
+  it('only ever asks for the account the session signed in with', async () => {
+    msal.accounts = [OTHER, ACCOUNT];
+    msal.silent = authResult();
+    await authenticator().acquireTokenSilently(SESSION);
+    assert.deepEqual(
+      msal.silentRequests.map((request) => request.account.homeAccountId),
+      [ACCOUNT.homeAccountId],
+    );
+  });
+
+  it('does not move to another account when this one cannot renew', async () => {
+    msal.accounts = [ACCOUNT, OTHER];
+    msal.silent = new Error('interaction_required');
+    await assert.rejects(authenticator().acquireTokenSilently(SESSION), AuthError);
+    assert.equal(msal.silentRequests.length, 1, 'no other account may be tried');
+  });
+
+  it('fails when the account has left the cache, even if another has its username', async () => {
+    msal.accounts = [{ ...OTHER, username: ACCOUNT.username }];
+    msal.silent = authResult();
+    await assert.rejects(authenticator().acquireTokenSilently(SESSION), AuthError);
+    assert.equal(msal.silentRequests.length, 0);
+  });
+
+  it('fails when the session has no recorded account', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    await assert.rejects(authenticator().acquireTokenSilently({}), AuthError);
+    assert.equal(msal.silentRequests.length, 0);
+  });
+
+  it('rejects a token that comes back for a different account', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult({ account: OTHER });
+    await assert.rejects(authenticator().acquireTokenSilently(SESSION), AuthError);
+  });
+
+  it('keeps both tokens for a session that started with both', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    msal.group = authResult({ accessToken: 'graph-token' });
+    const result = await authenticator(GROUP_AUTH).acquireTokenSilently({
+      ...SESSION,
+      groupToken: true,
+    });
+    assert.equal(result.accessToken, groupCredential(TOKEN, 'graph-token'));
+    assert.equal(result.groupToken, true);
+  });
+
+  it('fails rather than dropping the Graph token from a session that had it', async () => {
     msal.accounts = [ACCOUNT];
     msal.silent = authResult();
     msal.group = new Error('consent required');
-    const result = await authenticator({ ...AUTH, enableGroupToken: true }).acquireTokenSilently();
+    await assert.rejects(
+      authenticator(GROUP_AUTH).acquireTokenSilently({ ...SESSION, groupToken: true }),
+      /group token/,
+    );
+  });
+
+  it('does not add a Graph token to a session that started without one', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    msal.group = authResult({ accessToken: 'graph-token' });
+    const result = await authenticator(GROUP_AUTH).acquireTokenSilently(SESSION);
     assert.equal(result.accessToken, TOKEN);
-    assert.match(result.groupTokenFailure ?? '', /group token/);
+    assert.ok(msal.silentRequests.every((request) => request.scopes[0] === AUTH.scope));
+  });
+
+  it('records what a session starts with', async () => {
+    msal.accounts = [ACCOUNT];
+    msal.silent = authResult();
+    msal.group = authResult({ accessToken: 'graph-token' });
+    const both = await authenticator(GROUP_AUTH).acquireToken();
+    assert.equal(both.homeAccountId, ACCOUNT.homeAccountId);
+    assert.equal(both.groupToken, true);
+
+    msal.group = new Error('consent required');
+    const vpnOnly = await authenticator(GROUP_AUTH).acquireToken();
+    assert.equal(vpnOnly.homeAccountId, ACCOUNT.homeAccountId);
+    assert.equal(vpnOnly.groupToken, undefined);
   });
 });
 

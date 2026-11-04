@@ -59,6 +59,10 @@ export interface AuthOutcome {
   readonly tenantId: string | undefined;
   /** True when the token came from cache without user interaction. */
   readonly fromCache: boolean;
+  /** The MSAL account this belongs to. A username would not identify it. */
+  readonly homeAccountId?: string;
+  /** True when the credential carries a Graph token as well as the VPN token. */
+  readonly groupToken?: boolean;
   /**
    * Why the profile's group token could not be used, when it could not. The
    * credential is then the VPN token alone. Never contains a token.
@@ -75,9 +79,15 @@ export interface AuthOutcome {
  */
 export interface TokenSource {
   acquireToken(forceInteractive?: boolean): Promise<AuthOutcome>;
-  /** A current token with no user interaction, or an AuthError if there is none. */
-  acquireTokenSilently(): Promise<AuthOutcome>;
+  /**
+   * A current credential for a session already under way, with no user
+   * interaction: the same account and the same kind of credential, or an AuthError.
+   */
+  acquireTokenSilently(session: SessionCredential): Promise<AuthOutcome>;
 }
+
+/** What a session started with, and so what a reconnect has to keep. */
+export type SessionCredential = Pick<AuthOutcome, 'homeAccountId' | 'groupToken'>;
 
 /**
  * The part of MSAL's client this module actually uses.
@@ -344,11 +354,39 @@ export class EntraAuthenticator implements TokenSource {
    * A reconnect can happen at any time, with nobody watching. A sign-in started
    * then would open a browser out of nowhere, teach people to approve prompts
    * they did not ask for, and wait with no timeout while the tunnel stays down.
+   *
+   * Nor may it change what the session is. Another account in the cache would be
+   * a different identity, and gaining or losing the Graph token could move the
+   * user to another address pool, with nobody watching. So this is stricter than
+   * connecting: anything else is an error, and connecting again starts a new
+   * session the user can see. The official client does fall back here, and this
+   * is a deliberate difference.
    */
-  async acquireTokenSilently(): Promise<AuthOutcome> {
-    const silent = await this.trySilent();
-    if (silent) return silent;
-    throw new AuthError('the Entra session can no longer be renewed without signing in');
+  async acquireTokenSilently(session: SessionCredential): Promise<AuthOutcome> {
+    const accounts = await this.listAccounts();
+    const account = accounts.find((known) => known.homeAccountId === session.homeAccountId);
+    if (!account) {
+      throw new AuthError(
+        'the account this session signed in with is no longer in the token cache',
+      );
+    }
+
+    let result: AuthenticationResult | null;
+    try {
+      result = await this.getClient().acquireTokenSilent({ account, scopes: this.scopes });
+    } catch (error) {
+      throw new AuthError('the Entra session can no longer be renewed without signing in', {
+        cause: error,
+      });
+    }
+    if (!result?.accessToken || result.account?.homeAccountId !== session.homeAccountId) {
+      throw new AuthError(
+        'Entra did not return a token for the account this session signed in with',
+      );
+    }
+
+    const vpnOnly = this.vpnOutcome(result, true);
+    return session.groupToken ? await this.withGroupToken(vpnOnly, result) : vpnOnly;
   }
 
   /**
@@ -492,14 +530,35 @@ export class EntraAuthenticator implements TokenSource {
     return this.toOutcome(result, false);
   }
 
-  private async toOutcome(result: AuthenticationResult, fromCache: boolean): Promise<AuthOutcome> {
-    const vpnOnly: AuthOutcome = {
+  private vpnOutcome(result: AuthenticationResult, fromCache: boolean): AuthOutcome {
+    return {
       accessToken: result.accessToken,
       expiresOn: result.expiresOn ?? undefined,
       account: result.account?.username,
       tenantId: result.tenantId,
       fromCache,
+      ...(result.account ? { homeAccountId: result.account.homeAccountId } : {}),
     };
+  }
+
+  private async withGroupToken(
+    vpnOnly: AuthOutcome,
+    result: AuthenticationResult,
+  ): Promise<AuthOutcome> {
+    const group = await this.acquireGroupToken(result);
+    return {
+      ...vpnOnly,
+      groupToken: true,
+      accessToken: groupCredential(result.accessToken, group.accessToken),
+      expiresOn:
+        vpnOnly.expiresOn && group.expiresOn
+          ? new Date(Math.min(vpnOnly.expiresOn.getTime(), group.expiresOn.getTime()))
+          : undefined,
+    };
+  }
+
+  private async toOutcome(result: AuthenticationResult, fromCache: boolean): Promise<AuthOutcome> {
+    const vpnOnly = this.vpnOutcome(result, fromCache);
     if (!this.auth.enableGroupToken) return vpnOnly;
 
     // The official client carries on with the VPN token when it cannot get a
@@ -508,15 +567,7 @@ export class EntraAuthenticator implements TokenSource {
     // ever acquired silently. The caller reports the failure, so a default
     // address pool does not come as a silent surprise.
     try {
-      const group = await this.acquireGroupToken(result);
-      return {
-        ...vpnOnly,
-        accessToken: groupCredential(result.accessToken, group.accessToken),
-        expiresOn:
-          vpnOnly.expiresOn && group.expiresOn
-            ? new Date(Math.min(vpnOnly.expiresOn.getTime(), group.expiresOn.getTime()))
-            : undefined,
-      };
+      return await this.withGroupToken(vpnOnly, result);
     } catch (error) {
       return { ...vpnOnly, groupTokenFailure: describeError(error) };
     }
