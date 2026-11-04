@@ -152,6 +152,14 @@ never in the generated OpenVPN configuration.
 Certificate verification is never disabled: there is no option to turn it off,
 the gateway certificate is always validated against the system trust store,
 and no CA is ever read from the profile.
+.PP
+The gateway certificate's name is always checked, and there is no option to
+turn that off either. The expected name is worked out from the gateway
+hostname, and
+.B \-\-verify-name
+replaces it.
+.B openp2s connect
+refuses a gateway whose name it cannot work out.
 .SH EXIT STATUS
 .TP
 .B 0

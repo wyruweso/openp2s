@@ -15,6 +15,7 @@ import {
   resolveCaPath,
 } from '../../openvpn/ca.ts';
 import { locateOpenVpnBinary } from '../../openvpn/binary.ts';
+import { requireCertificateName } from '../../openvpn/certificateName.ts';
 import { isSystemdResolvedActive } from '../../network/systemdResolved.ts';
 import { ConnectionLock } from '../../platform/lock.ts';
 import { ensurePrivateDir } from '../../platform/paths.ts';
@@ -140,6 +141,7 @@ async function runConnect(
     ...(options.openvpnBinary ? { override: options.openvpnBinary } : {}),
   });
   const ca = resolveCaPath(options.ca);
+  const certificateName = requireCertificateName(profile, options.verifyName);
 
   // A binary with no BUILDINFO beside it could be anything, including the
   // distribution's own OpenVPN. Its USER_PASS_LEN would then be 128, the
@@ -159,6 +161,7 @@ async function runConnect(
   ui.heading(`Profile: ${profile.name}`);
   ui.fields([
     ['Gateway', profile.gateway],
+    ['Certificate name', certificateName],
     ['Authentication', 'Microsoft Entra ID'],
   ]);
   ui.line();
@@ -253,7 +256,7 @@ async function runConnect(
     elevator: context.elevator,
     connectTimeoutMs: (options.timeout ?? 90) * 1000,
     verb: ui.isVerbose ? 4 : 3,
-    ...(options.verifyName ? { verifyName: options.verifyName } : {}),
+    verifyName: certificateName,
     ...(options.azureCompat ? { azureCompat: true } : {}),
     ...(options.noDns ? { skipDns: true } : {}),
     ...(options.dnsAll ? { dnsAllDomains: true } : {}),

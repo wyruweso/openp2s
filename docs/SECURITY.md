@@ -81,22 +81,38 @@ The gateway certificate is validated against your system trust store, and the
 peer must present a certificate marked for TLS server use. **No CA is ever
 read from the profile**, so a modified profile cannot introduce a trust anchor.
 
-**Known limitation:** by default OpenP2S does not check _which_ certificate
-the gateway presents, only that it is valid and trusted. Any certificate
-issued under a trusted root is accepted, including one for a different Azure
-gateway.
+OpenP2S also checks the certificate's name, because a trusted chain alone does
+not show that a certificate belongs to an Azure gateway. There is no option to
+turn this off. The check is an exact match against the certificate's X.509 name
+(the CN), not browser-style hostname or SAN matching. OpenP2S works out the
+expected name from the gateway hostname:
 
-`--verify-name` adds that check. It is an exact match against the
-certificate's X.509 name (the CN), not browser-style hostname or SAN matching,
-so the value must be the CN exactly as the gateway presents it:
+| Gateway hostname                              | Expected name             |
+| --------------------------------------------- | ------------------------- |
+| `<name>.vpn.azure.com`                        | `*.vpn.azure.com`         |
+| `azuregateway-<guid>-<hash>.ln.vpn.azure.com` | `<guid>.ln.vpn.azure.com` |
+
+Only Microsoft can get a certificate for names under `vpn.azure.com`, so a
+modified profile cannot use this to make OpenP2S accept a certificate of its
+own. `*.vpn.azure.com` is shared by the gateways that use it, so in that case
+the check shows the peer is an Azure gateway, not which one.
+
+`--verify-name` replaces the expected name. It must be the CN exactly as the
+gateway presents it:
 
 ```bash
 openp2s connect profile.xml --verify-name '<certificate-cn>'
 ```
 
-Run `openp2s connect --verbose` once to see the CN the gateway presents. This
-is not the default because that name varies between clouds and gateway
-generations, and a wrong value fails the connection outright.
+A mismatch stops the connection rather than retrying, and reports the
+certificate presented. Virtual WAN gateways reach this on first use, because
+their name cannot be worked out from the hostname. A name that does not end in
+`.vpn.azure.com` may mean the peer is not your gateway.
+
+For any other hostname, such as another cloud or a test gateway, `connect`
+refuses until you supply a name. `openp2s probe` reports the CN the gateway
+presents. With no name to check, a probe accepts any trusted certificate and
+sends it your Entra token, so check that name before trusting it.
 
 ## Local security assumptions
 

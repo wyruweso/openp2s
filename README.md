@@ -236,7 +236,9 @@ See [docs/SECURITY.md](docs/SECURITY.md) for details and known limitations.
 - **x86-64 (amd64) only** — releases are published for amd64. The build
   tooling also supports arm64, but that is not yet a tested or supported
   release target.
-- Certificate-name pinning is opt-in (`--verify-name`); see `docs/SECURITY.md`.
+- The gateway certificate name is worked out from the hostname only for
+  standard Azure gateways. Virtual WAN and other hosts need `--verify-name`;
+  see `docs/SECURITY.md`.
 
 ## Prior work
 

@@ -21,6 +21,7 @@ import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { OpenP2SError } from '../../errors.ts';
 import { resolveCaPath } from '../../openvpn/ca.ts';
+import { resolveCertificateName } from '../../openvpn/certificateName.ts';
 import { AZURE_USERNAME } from '../../openvpn/azureCompat.ts';
 import { renderOpenVpnConfig, type CredentialDelivery } from '../../openvpn/config.ts';
 import { createContext, loadProfile, type GlobalOptions } from '../context.ts';
@@ -160,6 +161,16 @@ export async function convertCommand(
     ? { kind: 'file', path: options.credentials }
     : { kind: 'external' };
 
+  // A warning rather than a refusal: nothing is sent from here, and the file
+  // is the user's to edit.
+  const certificateName = resolveCertificateName(profile.gateways, options.verifyName);
+  if (!certificateName) {
+    ui.warn(
+      `cannot work out the certificate name for ${profile.gateway}, so this config accepts any ` +
+        'trusted certificate; pass --verify-name to require one',
+    );
+  }
+
   const config = renderOpenVpnConfig({
     profile,
     credentials,
@@ -167,7 +178,7 @@ export async function convertCommand(
     standalone: true,
     ...(inlineCa ? { inlineCa } : {}),
     ...(options.verb !== undefined ? { verb: options.verb } : {}),
-    ...(options.verifyName ? { verifyName: options.verifyName } : {}),
+    ...(certificateName ? { verifyName: certificateName } : {}),
     ...(options.azureCompat ? { azureCompat: true } : {}),
   });
 
@@ -227,6 +238,7 @@ export async function convertCommand(
         ? `${credentials.path} (you create it)`
         : 'supplied by OpenP2S at runtime (not named in the config)',
     ],
+    ['Certificate name', certificateName ?? 'not checked'],
     ['Permissions', '0600 (embeds the serversecret as inline tls-auth)'],
     [
       'Azure compat',
