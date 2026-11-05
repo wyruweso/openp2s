@@ -151,7 +151,10 @@ describe('convert: what lands in the file', () => {
 
   it('checks the certificate name without being asked', async () => {
     await convertCommand(FIXTURE, { output, quiet: true });
-    assert.match(readFileSync(output, 'utf8'), /^verify-x509-name \*\.vpn\.azure\.com name$/m);
+    assert.match(
+      readFileSync(output, 'utf8'),
+      /^verify-x509-name 00000000-1111-2222-3333-444444444444\.vpn\.azure\.com name$/m,
+    );
   });
 
   it('lets --verify-name replace the expected name', async () => {
