@@ -103,6 +103,7 @@ expected name from the gateway hostname:
 
 | Gateway hostname                              | Expected name             |
 | --------------------------------------------- | ------------------------- |
+| `azuregateway-<guid>-<hash>.vpn.azure.com`    | `<guid>.vpn.azure.com`    |
 | `<name>.vpn.azure.com`                        | `*.vpn.azure.com`         |
 | `azuregateway-<guid>-<hash>.ln.vpn.azure.com` | `<guid>.ln.vpn.azure.com` |
 

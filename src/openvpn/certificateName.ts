@@ -9,17 +9,23 @@
  *
  * OpenVPN compares the CN exactly and takes a single value, so the name has to
  * be known before connecting. For the hostnames below it can be worked out, so
- * nobody has to supply it. These are the names on Microsoft's certificates for
- * those hosts, read from Certificate Transparency logs in November 2026:
+ * nobody has to supply it:
  *
- *     <name>.vpn.azure.com                          *.vpn.azure.com
+ *     azuregateway-<guid>-<hash>.vpn.azure.com      <guid>.vpn.azure.com
  *     azuregateway-<guid>-<hash>.ln.vpn.azure.com   <guid>.ln.vpn.azure.com
+ *     <name>.vpn.azure.com                          *.vpn.azure.com
+ *
+ * The first was reported from a real gateway in issue #32. The other two come
+ * from Certificate Transparency logs in November 2026, and those logs show that
+ * the wildcard certificates exist, not which hosts present them. So a gateway
+ * with the first form could still present the wildcard. If one does, the
+ * connection stops and reports the name, as below.
  *
  * Only hosts under vpn.azure.com qualify. Only Microsoft can get a certificate
  * for that domain, so a modified profile cannot make OpenP2S accept a
  * certificate of its own by naming a host it controls.
  *
- * Virtual WAN shares the second host form but presents
+ * Virtual WAN shares the .ln host form but presents
  * wan.<id>.ln.vpn.azure.com, and <id> is not in the hostname. The rule then
  * expects the wrong name, which stops the connection and reports the
  * certificate presented. A wrong guess fails safely, and --verify-name fixes it.
@@ -28,7 +34,9 @@
 import { OpenP2SError } from '../errors.ts';
 
 const GUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const PER_GATEWAY_HOST = new RegExp(`^azuregateway-(${GUID})-[0-9a-z]+\\.ln\\.vpn\\.azure\\.com$`);
+const PER_GATEWAY_HOST = new RegExp(
+  `^azuregateway-(${GUID})-[0-9a-z]+\\.((?:ln\\.)?vpn\\.azure\\.com)$`,
+);
 const WILDCARD_HOST = /^[a-z0-9-]+\.vpn\.azure\.com$/;
 
 /** The name a gateway at this host should present, when that can be worked out. */
@@ -36,8 +44,8 @@ export function expectedCertificateName(host: string): string | undefined {
   // Hostnames are case-insensitive, but OpenVPN's comparison is not, and the
   // names on these certificates are lowercase.
   const name = host.toLowerCase();
-  const guid = PER_GATEWAY_HOST.exec(name)?.[1];
-  if (guid) return `${guid}.ln.vpn.azure.com`;
+  const perGateway = PER_GATEWAY_HOST.exec(name);
+  if (perGateway) return `${perGateway[1]}.${perGateway[2]}`;
   return WILDCARD_HOST.test(name) ? '*.vpn.azure.com' : undefined;
 }
 

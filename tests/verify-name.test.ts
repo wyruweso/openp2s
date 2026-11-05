@@ -51,13 +51,18 @@ describe('the certificate name', () => {
 const GUID = '11111111-2222-3333-4444-555555555555';
 
 describe('the expected certificate name', () => {
-  it('is the shared wildcard for a host directly under vpn.azure.com', () => {
-    for (const host of [
-      'azuregateway-fake-0000.vpn.azure.com',
-      `azuregateway-${GUID}-aaaaaaaaaaaa.vpn.azure.com`,
-    ]) {
+  it('is the shared wildcard for any other host directly under vpn.azure.com', () => {
+    for (const host of ['gateway.vpn.azure.com', 'azuregateway-fake-0000.vpn.azure.com']) {
       assert.equal(expectedCertificateName(host), '*.vpn.azure.com');
     }
+  });
+
+  it('is the per-gateway name for an azuregateway host directly under vpn.azure.com', () => {
+    // As reported from a real gateway: same GUID as the host, and no .ln.
+    assert.equal(
+      expectedCertificateName(`azuregateway-${GUID}-aaaaaaaaaaaa.vpn.azure.com`),
+      `${GUID}.vpn.azure.com`,
+    );
   });
 
   it('is the per-gateway name for an azuregateway host under ln.vpn.azure.com', () => {
@@ -94,6 +99,34 @@ describe('the expected certificate name', () => {
 
   it('does not treat an empty override as a way to turn the check off', () => {
     assert.equal(resolveCertificateName(['gateway.vpn.azure.com'], ''), '*.vpn.azure.com');
+  });
+
+  it('treats gateways with the same GUID as one name', () => {
+    assert.equal(
+      resolveCertificateName([
+        `azuregateway-${GUID}-aaaaaaaaaaaa.vpn.azure.com`,
+        `azuregateway-${GUID}-bbbbbbbbbbbb.vpn.azure.com`,
+      ]),
+      `${GUID}.vpn.azure.com`,
+    );
+  });
+
+  it('gives no answer for gateways whose names differ', () => {
+    const OTHER = '99999999-2222-3333-4444-555555555555';
+    for (const gateways of [
+      [`azuregateway-${GUID}-a.vpn.azure.com`, `azuregateway-${OTHER}-a.vpn.azure.com`],
+      [`azuregateway-${GUID}-a.vpn.azure.com`, `azuregateway-${GUID}-a.ln.vpn.azure.com`],
+      [`azuregateway-${GUID}-a.vpn.azure.com`, 'gateway.vpn.azure.com'],
+    ]) {
+      assert.equal(resolveCertificateName(gateways), undefined, gateways.join(' '));
+    }
+  });
+
+  it('lets an explicit name replace a per-gateway one', () => {
+    assert.equal(
+      resolveCertificateName([`azuregateway-${GUID}-a.vpn.azure.com`], '*.vpn.azure.com'),
+      '*.vpn.azure.com',
+    );
   });
 
   it('needs every gateway in the profile to agree, since OpenVPN holds one name', () => {
