@@ -267,6 +267,20 @@ export function validateTenantUrl(value: string, field = 'tenant'): ParsedTenant
 
 const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/**
+ * Validate the application to sign in as, from <applicationid>.
+ *
+ * It goes to the authority as the client id, so hold it to what an application
+ * id is rather than passing on whatever the profile says.
+ */
+export function validateApplicationId(value: string, field = 'applicationid'): string {
+  const raw = value.trim();
+  if (!GUID.test(raw)) {
+    throw new ProfileError(`<${field}> must be an application GUID: ${raw}`);
+  }
+  return raw.toLowerCase();
+}
+
 function isTenantIdentifier(value: string): boolean {
   if (GUID.test(value)) return true;
   if (value === 'common' || value === 'organizations' || value === 'consumers') return true;
