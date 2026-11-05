@@ -173,9 +173,23 @@ export interface EntraAuthenticatorOptions {
 export function explainAuthFailure(error: unknown, flow?: InteractiveFlow): string | undefined {
   const message = describeError(error);
 
+  // Codes are matched whole, because a code can start with a shorter one: a bare
+  // AADSTS50011 also matched AADSTS500113, and gave the wrong advice for it.
+
+  // An application with no reply address at all is usually the wrong application
+  // to sign in as, so trying another sign-in flow is not the first thing to do.
+  if (/\bAADSTS500113\b/i.test(message)) {
+    return (
+      'This application has no reply address registered, so it is probably not the\n' +
+      'one to sign in with. With a custom audience, the profile may need a separate\n' +
+      '<applicationid>, or you can pass --client-id. Your VPN administrator can tell\n' +
+      'you which application to use.'
+    );
+  }
+
   // Flow-specific first: the same AADSTS code means different things to a
   // user depending on which sign-in they were doing.
-  if (/AADSTS50011|redirect.?uri/i.test(message)) {
+  if (/\bAADSTS50011\b|redirect.?uri/i.test(message)) {
     return flow === 'browser'
       ? 'This application id does not permit the loopback redirect the browser\n' +
           'sign-in needs. Try --auth device-code, or --client-id with an\n' +
@@ -183,22 +197,22 @@ export function explainAuthFailure(error: unknown, flow?: InteractiveFlow): stri
       : 'The reply address was rejected by this tenant.';
   }
 
-  if (/AADSTS50059|tenant.*not found/i.test(message)) {
+  if (/\bAADSTS50059\b|tenant.*not found/i.test(message)) {
     return 'The tenant in the profile could not be found. Check the <tenant> URL.';
   }
-  if (/AADSTS700016|application.*not found|unauthorized_client/i.test(message)) {
+  if (/\bAADSTS700016\b|application.*not found|unauthorized_client/i.test(message)) {
     return (
       'The application id was rejected by this tenant. The profile audience ' +
       'may not be registered here; try passing --client-id explicitly.'
     );
   }
-  if (/AADSTS65001|consent/i.test(message)) {
+  if (/\bAADSTS65001\b|consent/i.test(message)) {
     return 'An administrator must grant consent for the VPN application in this tenant.';
   }
-  if (/AADSTS50076|AADSTS50079|multi-factor/i.test(message)) {
+  if (/\bAADSTS50076\b|\bAADSTS50079\b|multi-factor/i.test(message)) {
     return 'Multi-factor authentication is required. Complete the sign-in in the browser.';
   }
-  if (/AADSTS53003|conditional access/i.test(message)) {
+  if (/\bAADSTS53003\b|conditional access/i.test(message)) {
     return 'A Conditional Access policy blocked this sign-in. Contact your administrator.';
   }
   // Only the device-code flow has a code that can expire, and an expired code
