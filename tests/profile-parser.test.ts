@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { AzureProfileParser } from '../src/profile/parser.ts';
+import { resolveAuthIdentity } from '../src/cli/context.ts';
 import { ProfileError } from '../src/errors.ts';
 import { validateAudience, validateTenantUrl } from '../src/profile/validate.ts';
 
@@ -113,6 +114,45 @@ describe('AzureProfileParser: well-formed profiles', () => {
   it('lowercases the gateway so config and SNI always agree', () => {
     const profile = parser.parse(buildXml({ fqdn: 'AzureGateway-Mixed.VPN.Azure.Com' }));
     assert.equal(profile.gateway, 'azuregateway-mixed.vpn.azure.com');
+  });
+
+  describe('DNS servers wrapped in <DnsServerEntry>', () => {
+    const withDnsServers = (inner: string): string => `<?xml version="1.0"?>
+<AzVpnProfile>
+  <fqdn>gw.vpn.azure.com</fqdn>
+  <tenant>https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555</tenant>
+  <audience>41b23e61-6c1e-4545-b367-cd054e0ed4b4</audience>
+  <serversecret>${'ab'.repeat(256)}</serversecret>
+  <clientconfig><dnsservers>${inner}</dnsservers></clientconfig>
+</AzVpnProfile>`;
+
+    it('reads one entry', () => {
+      const xml = withDnsServers(
+        '<DnsServerEntry><dnsserver>192.0.2.10</dnsserver></DnsServerEntry>',
+      );
+      assert.deepEqual(parser.parse(xml).dnsServers, ['192.0.2.10']);
+    });
+
+    it('reads several entries in order and removes duplicates', () => {
+      const xml = withDnsServers(`
+        <DnsServerEntry><dnsserver>192.0.2.10</dnsserver></DnsServerEntry>
+        <DnsServerEntry><dnsserver>192.0.2.11</dnsserver></DnsServerEntry>
+        <DnsServerEntry><dnsserver>192.0.2.10</dnsserver></DnsServerEntry>`);
+      assert.deepEqual(parser.parse(xml).dnsServers, ['192.0.2.10', '192.0.2.11']);
+    });
+
+    it('validates wrapped addresses like any other', () => {
+      const xml = withDnsServers(
+        '<DnsServerEntry><dnsserver>10.0.0.999</dnsserver></DnsServerEntry>',
+      );
+      assert.throws(() => parser.parse(xml), ProfileError);
+    });
+
+    it('ignores an entry with no server in it', () => {
+      for (const entry of ['<DnsServerEntry/>', '<DnsServerEntry>192.0.2.10</DnsServerEntry>']) {
+        assert.deepEqual(parser.parse(withDnsServers(entry)).dnsServers, []);
+      }
+    });
   });
 
   it('deduplicates repeated DNS servers and routes', () => {
@@ -358,5 +398,96 @@ describe('tenant and audience URL hygiene', () => {
       'https://vpn.example.com/.default',
     );
     assert.equal(validateAudience('api://11111111-2222-3333-4444-555555555555').kind, 'uri');
+  });
+});
+
+describe('group-token profile setting', () => {
+  it('is on only for exactly "true", as in the official client', () => {
+    const xml = fixture('azure-schema');
+    for (const value of ['true', 'True', 'TRUE', '1', 'false', '0', 'invalid', '']) {
+      const profile = parser.parse(
+        xml.replace(
+          '<enablegrouptoken>false</enablegrouptoken>',
+          `<enablegrouptoken>${value}</enablegrouptoken>`,
+        ),
+      );
+      assert.equal(profile.auth.enableGroupToken === true, value === 'true', value);
+    }
+  });
+});
+
+describe('which application to sign in as', () => {
+  const AUDIENCE = '41b23e61-6c1e-4545-b367-cd054e0ed4b4';
+  const APPLICATION = 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8';
+  const OVERRIDE = '99999999-8888-7777-6666-555555555555';
+
+  /** The Azure-exported profile, with extra elements inside <aad>. */
+  const withAad = (extra: string): string =>
+    fixture('azure-schema').replace('</audience>', `</audience>${extra}`);
+
+  it('uses the audience when nothing else is given, as before', () => {
+    const { auth } = parser.parse(fixture('azure-schema'));
+    assert.equal(auth.clientId, AUDIENCE);
+    assert.equal(auth.scope, `${AUDIENCE}/.default`);
+  });
+
+  it('signs in as <applicationid>, keeping the scope on the audience', () => {
+    const { auth } = parser.parse(withAad(`<applicationid>${APPLICATION}</applicationid>`));
+    assert.equal(auth.clientId, APPLICATION);
+    assert.equal(auth.audience, AUDIENCE);
+    assert.equal(auth.scope, `${AUDIENCE}/.default`);
+  });
+
+  it('lets <clientid> override <applicationid>', () => {
+    const both = `<applicationid>${APPLICATION}</applicationid><clientid>${OVERRIDE}</clientid>`;
+    assert.equal(parser.parse(withAad(both)).auth.clientId, OVERRIDE);
+  });
+
+  it('keeps honouring <clientid> on its own', () => {
+    const { auth } = parser.parse(withAad(`<clientid>${OVERRIDE}</clientid>`));
+    assert.equal(auth.clientId, OVERRIDE);
+  });
+
+  it('normalises the GUID, because the cache key depends on it', () => {
+    const { auth } = parser.parse(
+      withAad(`<applicationid>${APPLICATION.toUpperCase()}</applicationid>`),
+    );
+    assert.equal(auth.clientId, APPLICATION);
+  });
+
+  it('rejects an <applicationid> that is not a GUID', () => {
+    assert.throws(
+      () => parser.parse(withAad('<applicationid>not-a-guid</applicationid>')),
+      (error: unknown) => {
+        assert.ok(error instanceof ProfileError);
+        assert.match(error.message, /applicationid/);
+        return true;
+      },
+    );
+  });
+
+  it('treats an empty or nil <applicationid> as absent', () => {
+    for (const empty of ['<applicationid></applicationid>', '<applicationid i:nil="true" />']) {
+      assert.equal(parser.parse(withAad(empty)).auth.clientId, AUDIENCE, empty);
+    }
+  });
+
+  it('supplies the client id a URI audience cannot', () => {
+    const uri = 'https://vpn.contoso.example';
+    const xml = fixture('azure-schema').replace(
+      `<audience>${AUDIENCE}</audience>`,
+      `<audience>${uri}</audience><applicationid>${APPLICATION}</applicationid>`,
+    );
+    const { auth } = parser.parse(xml);
+    assert.equal(auth.clientId, APPLICATION);
+    assert.equal(auth.scope, `${uri}/.default`);
+  });
+
+  it('gives every command the same identity, with --client-id on top', () => {
+    const profile = parser.parse(withAad(`<applicationid>${APPLICATION}</applicationid>`));
+    assert.equal(resolveAuthIdentity(profile).clientId, APPLICATION);
+    const overridden = resolveAuthIdentity(profile, { clientId: OVERRIDE });
+    assert.equal(overridden.clientId, OVERRIDE);
+    assert.equal(overridden.scope, `${AUDIENCE}/.default`);
   });
 });

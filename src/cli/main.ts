@@ -21,7 +21,7 @@ import { probeCommand } from './commands/probe.ts';
 import { statusCommand } from './commands/status.ts';
 import { Ui } from './ui.ts';
 
-const VERSION = '0.2.1';
+const VERSION = '0.3.0-rc.2';
 
 /** Options every command accepts. */
 interface RootOptions {
@@ -109,7 +109,7 @@ export function buildProgram(): Command {
     .option('--dns-domain <suffix...>', 'extra DNS suffixes to route over the VPN')
     .option(
       '--verify-name <name>',
-      'require this certificate name, e.g. "*.vpn.azure.com" (see docs/SECURITY.md)',
+      'require this certificate name instead of the one worked out from the gateway hostname (see docs/SECURITY.md)',
     )
     .action(async (profile: string, options: Record<string, unknown>, command: Command) => {
       const code = await connectCommand(profile, {
@@ -189,7 +189,10 @@ export function buildProgram(): Command {
     .option('--inline-ca', 'embed the CA certificate so the config is self-contained')
     .option('--credentials <path>', 'emit auth-user-pass <path> so the config is runnable by hand')
     .option('--experimental-azure-compat', 'also emit the Azure OCC string and peer-info')
-    .option('--verify-name <name>', 'require this certificate name')
+    .option(
+      '--verify-name <name>',
+      'require this certificate name instead of the one worked out from the gateway hostname',
+    )
     .option('--verb <n>', 'OpenVPN verbosity')
     .action(async (profile: string, options: Record<string, unknown>, command: Command) => {
       process.exitCode = await convertCommand(profile, {
@@ -247,6 +250,10 @@ export function buildProgram(): Command {
     .option('--openvpn-binary <path>', 'override the OpenP2S OpenVPN binary')
     .option('--timeout <seconds>', 'how long to wait', '45')
     .option('--label <name>', 'label for this variant in the output')
+    .option(
+      '--verify-name <name>',
+      'require this certificate name instead of the one worked out from the gateway hostname',
+    )
     .option('--json', 'machine-readable output')
     .action(async (profile: string, options: Record<string, unknown>, command: Command) => {
       process.exitCode = await probeCommand(profile, {
@@ -262,6 +269,7 @@ export function buildProgram(): Command {
           ? { openvpnBinary: options['openvpnBinary'] }
           : {}),
         ...(typeof options['label'] === 'string' ? { label: options['label'] } : {}),
+        ...(typeof options['verifyName'] === 'string' ? { verifyName: options['verifyName'] } : {}),
         ...(options['json'] === true ? { json: true } : {}),
         timeout: parsePositiveInt(options['timeout'], '--timeout', 45),
       });

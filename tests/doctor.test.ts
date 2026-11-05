@@ -6,9 +6,9 @@
  * asked for against what `resolvectl` actually reports — and a parser that
  * silently returns nothing would turn every comparison into a false result.
  *
- * Scope: the parser only. The checks built on top of it - environmentChecks,
- * profileChecks, liveChecks - are not covered here and are worth their own
- * tests.
+ * Scope: mostly the parser. Of the checks built on top of it, the CA check is
+ * covered because it decides whether doctor agrees with connect.
+ * environmentChecks, profileChecks and liveChecks are worth their own tests.
  */
 
 import assert from 'node:assert/strict';
@@ -16,7 +16,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { liveChecks, parseResolvectlField, type Check } from '../src/cli/commands/doctor.ts';
+import {
+  caCheck,
+  liveChecks,
+  parseResolvectlField,
+  type Check,
+} from '../src/cli/commands/doctor.ts';
 import type { CommandContext } from '../src/cli/context.ts';
 import { Ui } from '../src/cli/ui.ts';
 import { RecordingCommandRunner, type CommandResult } from '../src/platform/exec.ts';
@@ -24,6 +29,48 @@ import { processStartTime } from '../src/platform/lock.ts';
 import { resolvePaths } from '../src/platform/paths.ts';
 import { Elevator } from '../src/platform/privilege.ts';
 import { SessionStore, type SessionRecord } from '../src/platform/session.ts';
+
+describe('the CA check agrees with what connect would do', () => {
+  const AZURE = ['gateway.vpn.azure.com'];
+  const OTHER = ['vpn.example.com'];
+  const noFiles = (): boolean => false;
+  const onlyBundle = (path: string): boolean => path === '/etc/ssl/certs/ca-certificates.crt';
+
+  it('passes an Azure gateway with no system store, because the roots ship with OpenP2S', () => {
+    const check = caCheck(undefined, AZURE, noFiles);
+    assert.equal(check.status, 'ok');
+    assert.match(check.label, /ship with OpenP2S/);
+  });
+
+  it('fails a --ca file that does not exist, even for an Azure gateway', () => {
+    for (const gateways of [AZURE, OTHER, undefined]) {
+      const check = caCheck('/nope.pem', gateways, noFiles);
+      assert.equal(check.status, 'fail');
+      assert.match(check.label, /--ca/);
+    }
+  });
+
+  it('reports the --ca file rather than the roots it replaces', () => {
+    const check = caCheck('/home/user/root.pem', AZURE, () => true);
+    assert.equal(check.status, 'ok');
+    assert.match(check.label, /--ca/);
+    assert.equal(check.detail, '/home/user/root.pem');
+  });
+
+  it('fails another host with no system store, because connect would', () => {
+    const check = caCheck(undefined, OTHER, noFiles);
+    assert.equal(check.status, 'fail');
+    assert.ok(check.fix);
+  });
+
+  it('passes another host when the system store is there', () => {
+    assert.equal(caCheck(undefined, OTHER, onlyBundle).status, 'ok');
+  });
+
+  it('only warns about a missing store when there is no profile to judge it by', () => {
+    assert.equal(caCheck(undefined, undefined, noFiles).status, 'warn');
+  });
+});
 
 let runtimeDir: string;
 
@@ -344,6 +391,16 @@ describe('doctor: live state that is not a DNS problem', () => {
     assert.equal(check(checks, /could not check whether tun0 exists/).status, 'warn');
     // And it carries on: the DNS checks are still worth running.
     assert.equal(check(checks, /DNS servers are attached/).status, 'ok');
+  });
+
+  it('reports DNS lost in a reconnect, rather than skipping the checks', async () => {
+    const { context } = liveContext({ interfaceExists: true, status: HEALTHY_STATUS });
+    await writeLiveSession({ dnsServers: [], dnsFailure: 'sudo: a password is required' });
+    const checks = await liveChecks(context, undefined, undefined);
+    const failure = check(checks, /could not be restored/);
+    assert.equal(failure.status, 'fail');
+    assert.match(failure.detail ?? '', /password is required/);
+    assert.ok(!checks.some((entry) => /no DNS was configured/.test(entry.label)));
   });
 
   it('skips DNS checks entirely when the connection configured none', async () => {

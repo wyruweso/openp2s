@@ -1,16 +1,19 @@
 /**
- * Certificate authority resolution: the system trust store, and nothing else.
+ * Certificate authority resolution.
  *
- * No CA is read from the profile - one that could nominate its own root would
- * be a trivial machine-in-the-middle - and none is bundled, which would go
- * stale and bypass distribution trust updates.
+ * A gateway under vpn.azure.com is validated against the roots Azure gateways
+ * use, which ship with OpenP2S; azureRoots.ts says why. Any other host uses the
+ * system trust store. --ca replaces either.
  *
- * The observed chain is DigiCert Global Root G2 -> Microsoft TLS RSA Root G2
- * -> Microsoft TLS G2 RSA CA -> *.vpn.azure.com.
+ * No CA is read from the profile: one that could nominate its own root would be
+ * a trivial machine-in-the-middle. Nor does the profile's thumbprint choose
+ * between roots. A profile can be modified, and a stale one would name a root
+ * its gateway has moved away from.
  */
 
 import { existsSync } from 'node:fs';
 import { OpenP2SError } from '../errors.ts';
+import { azureRootsPem } from './azureRoots.ts';
 
 /**
  * Debian and Ubuntu explode the trust store into individual files, which lets
@@ -47,34 +50,57 @@ const CANDIDATE_BUNDLE_PATHS: readonly string[] = [
 ];
 
 export interface ResolvedCa {
+  /** The CA file, or a description of the built-in roots when there is none. */
   readonly path: string;
-  /** True when this is the single DigiCert root rather than a whole bundle. */
+  /** True when this is a specific root or set of roots rather than a whole bundle. */
   readonly pinned: boolean;
+  /** PEM to embed in the config, when the roots ship with OpenP2S. */
+  readonly inlinePem?: string;
+}
+
+export interface ResolveCaOptions {
+  /** The profile's gateways. Without them, only the system store is considered. */
+  readonly gateways?: readonly string[];
+  /** Test seam. */
+  readonly exists?: (path: string) => boolean;
+}
+
+const AZURE_GATEWAY_HOST = /\.vpn\.azure\.com$/i;
+
+/** Whether these gateways are validated against the roots that ship with OpenP2S. */
+export function usesBuiltInRoots(gateways: readonly string[]): boolean {
+  return gateways.length > 0 && gateways.every((host) => AZURE_GATEWAY_HOST.test(host));
 }
 
 /**
- * Find the CA file to hand to OpenVPN.
+ * Find what to validate the gateway against.
  *
  * An explicit override is honoured but must exist; it is never silently
  * ignored, because a caller who thinks they pinned a root and did not is
  * worse off than one who gets an error.
  */
-export function resolveCaPath(override?: string): ResolvedCa {
+export function resolveCaPath(override?: string, options: ResolveCaOptions = {}): ResolvedCa {
+  const exists = options.exists ?? existsSync;
+
   if (override) {
-    if (!existsSync(override)) {
+    if (!exists(override)) {
       throw new OpenP2SError(`CA file not found: ${override}`);
     }
     return { path: override, pinned: true };
   }
 
+  if (usesBuiltInRoots(options.gateways ?? [])) {
+    return { path: 'built into OpenP2S', pinned: true, inlinePem: azureRootsPem() };
+  }
+
   for (const candidate of CANDIDATE_CA_PATHS) {
-    if (existsSync(candidate)) {
+    if (exists(candidate)) {
       return { path: candidate, pinned: true };
     }
   }
 
   for (const candidate of CANDIDATE_BUNDLE_PATHS) {
-    if (existsSync(candidate)) {
+    if (exists(candidate)) {
       return { path: candidate, pinned: false };
     }
   }
@@ -89,7 +115,7 @@ export function resolveCaPath(override?: string): ResolvedCa {
 
 /**
  * `<usepinnedroot>` asks for validation against one specific root. OpenP2S
- * uses the system store, which is weaker, so this reports "unsupported" and
+ * accepts any root in a set, which is weaker, so this reports "unsupported" and
  * callers refuse rather than silently substituting the weaker policy.
  *
  * Shared by `connect` and `doctor` so they cannot disagree.
@@ -108,8 +134,8 @@ export const PINNED_ROOT_MESSAGE =
 
 export const PINNED_ROOT_HINT =
   'The profile sets <usepinnedroot>true</usepinnedroot>, meaning the gateway\n' +
-  'certificate should be validated against one specific root rather than the\n' +
-  'system trust store. OpenP2S validates against the system store, which is\n' +
-  'weaker than what the profile asks for.\n\n' +
+  'certificate should be validated against one specific root. OpenP2S accepts\n' +
+  'any of the roots Azure gateways use, or the system trust store for other\n' +
+  'hosts, which is weaker than what the profile asks for.\n\n' +
   'Pass a specific root with --ca <file> and\n' +
   '--allow-system-trust-store to accept the weaker policy deliberately.';

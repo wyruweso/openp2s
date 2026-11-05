@@ -15,6 +15,7 @@ import {
   resolveCaPath,
 } from '../../openvpn/ca.ts';
 import { locateOpenVpnBinary } from '../../openvpn/binary.ts';
+import { requireCertificateName } from '../../openvpn/certificateName.ts';
 import { isSystemdResolvedActive } from '../../network/systemdResolved.ts';
 import { ConnectionLock } from '../../platform/lock.ts';
 import { ensurePrivateDir } from '../../platform/paths.ts';
@@ -139,7 +140,8 @@ async function runConnect(
     repoRoot: context.repoRoot,
     ...(options.openvpnBinary ? { override: options.openvpnBinary } : {}),
   });
-  const ca = resolveCaPath(options.ca);
+  const ca = resolveCaPath(options.ca, { gateways: profile.gateways });
+  const certificateName = requireCertificateName(profile, options.verifyName);
 
   // A binary with no BUILDINFO beside it could be anything, including the
   // distribution's own OpenVPN. Its USER_PASS_LEN would then be 128, the
@@ -159,6 +161,7 @@ async function runConnect(
   ui.heading(`Profile: ${profile.name}`);
   ui.fields([
     ['Gateway', profile.gateway],
+    ['Certificate name', certificateName],
     ['Authentication', 'Microsoft Entra ID'],
   ]);
   ui.line();
@@ -173,7 +176,7 @@ async function runConnect(
   if (pinnedRootSupport(profile, options) === 'overridden') {
     ui.warn(
       'this profile asks for pinned-root validation; --allow-system-trust-store ' +
-        'was given, so the system trust store is used instead',
+        "was given, so OpenP2S's usual certificate validation is used instead",
     );
   }
 
@@ -248,12 +251,13 @@ async function runConnect(
     paths,
     binary,
     caPath: ca.path,
+    ...(ca.inlinePem ? { inlineCa: ca.inlinePem } : {}),
     authenticator,
     dns: createDnsConfigurator(context),
     elevator: context.elevator,
     connectTimeoutMs: (options.timeout ?? 90) * 1000,
     verb: ui.isVerbose ? 4 : 3,
-    ...(options.verifyName ? { verifyName: options.verifyName } : {}),
+    verifyName: certificateName,
     ...(options.azureCompat ? { azureCompat: true } : {}),
     ...(options.noDns ? { skipDns: true } : {}),
     ...(options.dnsAll ? { dnsAllDomains: true } : {}),
@@ -279,6 +283,7 @@ async function runConnect(
           );
         }
       },
+      onReconnected: () => ui.ok('VPN reconnected'),
       onDnsConfigured: () =>
         ui.ok(options.dnsAll ? 'Configured VPN-wide DNS (~.)' : 'Configured split DNS'),
       onWarning: (message) => ui.warn(message),

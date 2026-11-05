@@ -1,12 +1,12 @@
 {
   "name": "openp2s",
-  "version": "0.2.1",
+  "version": "0.3.0-rc.2",
   "description": "Native Linux client for Azure Point-to-Site VPN with Microsoft Entra ID authentication",
   "license": "GPL-2.0-only",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24.13.0"
+    "node": ">=24.22.2"
   },
   "bin": {
     "openp2s": "./src/cli/run.ts"
@@ -33,7 +33,7 @@
     "check:cli-reproducible": "scripts/check-cli-reproducible.sh"
   },
   "dependencies": {
-    "@azure/msal-node": "^5.6.0",
+    "@azure/msal-node": "^7.1.2",
     "commander": "^15.0.0",
     "fast-xml-parser": "^5.11.2"
   },
@@ -41,12 +41,12 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.19.2",
     "esbuild": "0.28.2",
-    "eslint": "^10.12.0",
+    "eslint": "^10.14.0",
     "fast-check": "^4.10.2",
     "postject": "1.0.0-alpha.6",
     "prettier": "^3.9.10",
-    "snyk": "1.1308.1",
+    "snyk": "1.1308.3",
     "typescript": "^5.9.0",
-    "typescript-eslint": "^8.71.2"
+    "typescript-eslint": "^8.72.1"
   }
 }

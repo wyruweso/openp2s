@@ -121,11 +121,52 @@ async function interfaceExists(
   }
 }
 
+/**
+ * What this gateway would be validated against, as `connect` would see it.
+ *
+ * A green tick here has to mean connect will not fail for this reason, so the
+ * severity follows from what connect needs. Without a profile there is no way
+ * to know whether the system store matters: Azure gateways do not need it.
+ */
+export function caCheck(
+  override: string | undefined,
+  gateways: readonly string[] | undefined,
+  exists?: (path: string) => boolean,
+): Check {
+  const resolveOptions = { ...(gateways ? { gateways } : {}), ...(exists ? { exists } : {}) };
+  try {
+    const ca = resolveCaPath(override, resolveOptions);
+    if (override)
+      return { status: 'ok', label: 'the CA file from --ca is available', detail: ca.path };
+    if (ca.inlinePem)
+      return { status: 'ok', label: 'the roots for this gateway ship with OpenP2S' };
+    return {
+      status: 'ok',
+      label: ca.pinned ? 'DigiCert Global Root G2 is available' : 'system CA bundle is available',
+      detail: ca.path,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : undefined;
+    if (override) return { status: 'fail', label: 'the CA file from --ca was not found', detail };
+    const install = "Install your distribution's CA certificates package.";
+    return gateways
+      ? { status: 'fail', label: 'no system CA store found for this gateway', detail, fix: install }
+      : {
+          status: 'warn',
+          label: 'no system CA store found',
+          detail,
+          fix: `Only gateways outside vpn.azure.com need it. ${install}`,
+        };
+  }
+}
+
 async function environmentChecks(
   context: CommandContext,
   options: DoctorOptions,
   /** True when a profile was given and it actually needs split DNS. */
   dnsRequired: boolean | undefined,
+  /** The profile's gateways, when one was given and could be read. */
+  gateways: readonly string[] | undefined,
 ): Promise<Check[]> {
   const checks: Check[] = [];
 
@@ -158,26 +199,7 @@ async function environmentChecks(
         },
   );
 
-  try {
-    const ca = resolveCaPath(options.ca);
-    checks.push(
-      ca.pinned
-        ? { status: 'ok', label: 'DigiCert Global Root G2 is available', detail: ca.path }
-        : {
-            status: 'warn',
-            label: 'using the whole system CA bundle',
-            detail: ca.path,
-            fix: "Install or update your distribution's CA certificates package.",
-          },
-    );
-  } catch (error) {
-    checks.push({
-      status: 'fail',
-      label: 'no system CA store found',
-      detail: error instanceof Error ? error.message : undefined,
-      fix: "Install your distribution's CA certificates package.",
-    });
-  }
+  checks.push(caCheck(options.ca, gateways));
 
   try {
     const binary = locateOpenVpnBinary({ repoRoot: context.repoRoot });
@@ -225,7 +247,7 @@ async function profileChecks(context: CommandContext, profile: AzureVpnProfile):
       status: 'fail',
       label: PINNED_ROOT_MESSAGE,
       fix:
-        'OpenP2S validates against the system trust store, which is weaker than\n' +
+        'OpenP2S does not validate against one specific root, which is weaker than\n' +
         '    what the profile asks for. Pass --allow-system-trust-store to connect\n' +
         '    anyway, accepting that policy.',
     });
@@ -317,6 +339,16 @@ export async function liveChecks(
       label: `could not check whether ${interfaceName} exists`,
       detail: 'the `ip` command is unavailable',
     });
+  }
+
+  if (record.dnsFailure) {
+    checks.push({
+      status: 'fail',
+      label: 'VPN DNS could not be restored after a reconnect',
+      detail: record.dnsFailure,
+      fix: 'Private names will not resolve correctly. Disconnect and connect again.',
+    });
+    return checks;
   }
 
   if (record.dnsServers.length === 0) {
@@ -505,7 +537,7 @@ export async function doctorCommand(
   }
   const dnsRequired = profile ? profile.dnsServers.length > 0 : undefined;
 
-  const environment = await environmentChecks(context, options, dnsRequired);
+  const environment = await environmentChecks(context, options, dnsRequired, profile?.gateways);
   render(context, environment);
   all.push(...environment);
 

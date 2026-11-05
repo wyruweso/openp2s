@@ -20,6 +20,7 @@
 import { describeAzureCompat } from '../../openvpn/azureCompat.ts';
 import { locateOpenVpnBinary } from '../../openvpn/binary.ts';
 import { PINNED_ROOT_MESSAGE, pinnedRootSupport, resolveCaPath } from '../../openvpn/ca.ts';
+import { resolveCertificateName } from '../../openvpn/certificateName.ts';
 import { summariseProfile } from '../../profile/types.ts';
 import { createContext, loadProfile, type GlobalOptions } from '../context.ts';
 
@@ -52,12 +53,21 @@ export async function inspectCommand(
 
   ui.fields([
     ['Gateway', `${summary.gateway}:${summary.port}`],
+    [
+      'Certificate name',
+      resolveCertificateName(profile.gateways) ??
+        'cannot be worked out; connect needs --verify-name',
+    ],
     ['Authentication', 'Microsoft Entra ID'],
     ['Tenant', summary.tenantId],
     ['Authority', summary.authority],
     ['Audience', summary.audience],
     ['Client ID', summary.clientId],
     ['Scope', profile.auth.scope],
+    [
+      'Group authentication',
+      profile.auth.enableGroupToken ? 'VPN + Microsoft Graph token' : 'disabled',
+    ],
     ['Server secret', summary.serverSecret],
     ['DNS servers', summary.dnsServers],
     ['DNS domains', summary.dnsSuffixes],
@@ -106,17 +116,19 @@ export async function inspectCommand(
 
   // CA resolution can fail, but inspect should still be useful when it does.
   try {
-    const ca = resolveCaPath(options.ca);
+    const ca = resolveCaPath(options.ca, { gateways: profile.gateways });
     ui.fields([
       ['CA certificate', ca.path],
       [
         'CA scope',
-        ca.pinned
-          ? 'pinned to a single root certificate'
-          : // Not a claim about the trust store's contents: OpenP2S only looked
-            // for a standalone PEM at known paths. The root is very likely
-            // inside the bundle.
-            'system trust bundle',
+        ca.inlinePem
+          ? 'the roots Azure gateways use'
+          : ca.pinned
+            ? 'pinned to a single root certificate'
+            : // Not a claim about the trust store's contents: OpenP2S only looked
+              // for a standalone PEM at known paths. The root is very likely
+              // inside the bundle.
+              'system trust bundle',
       ],
     ]);
   } catch (error) {

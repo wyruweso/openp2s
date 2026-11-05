@@ -90,6 +90,18 @@ mode 0600.
 .I /usr/lib/openp2s/openvpn
 The patched OpenVPN binary.
 .SH AUTHENTICATION
+Profiles enabling group tokens also acquire a Microsoft Graph access token
+for the same account and tenant. Both are sent to the gateway in its TLV
+credential format, and only to a gateway whose certificate name is checked.
+Group authentication supports Azure Public; existing Graph consent is required.
+If no group token can be obtained, OpenP2S warns and connects with the VPN token
+alone, so the gateway may assign its default address pool. The combined
+credential is subject to the OpenVPN size limit.
+.PP
+A reconnect keeps the account and the kind of credential the session started
+with, and never starts a sign-in. If it cannot, OpenVPN stops and the user must
+connect again.
+.PP
 Sign-in uses the browser authorization-code flow with PKCE: OpenP2S opens a
 Microsoft sign-in page and listens briefly on 127.0.0.1 for the reply. The
 authorization code is bound to a one-time verifier generated locally, so an
@@ -142,8 +154,17 @@ On either path the token never appears in argv or in the environment, and
 never in the generated OpenVPN configuration.
 .PP
 Certificate verification is never disabled: there is no option to turn it off,
-the gateway certificate is always validated against the system trust store,
-and no CA is ever read from the profile.
+the gateway certificate is always validated, against the roots Azure gateways
+use, which ship with OpenP2S, or against the system trust store for other hosts.
+No CA is ever read from the profile.
+.PP
+The gateway certificate's name is always checked, and there is no option to
+turn that off either. The expected name is worked out from the gateway
+hostname, and
+.B \-\-verify-name
+replaces it.
+.B openp2s connect
+refuses a gateway whose name it cannot work out.
 .SH EXIT STATUS
 .TP
 .B 0

@@ -9,11 +9,13 @@
  */
 
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { AuthOutcome, TokenSource } from '../src/auth/entra.ts';
+import type { AuthOutcome, SessionCredential, TokenSource } from '../src/auth/entra.ts';
 import { AuthError, NetworkError, TunnelError } from '../src/errors.ts';
 import type { DnsConfigurator } from '../src/network/dns.ts';
 import type { OpenVpnBinary } from '../src/openvpn/binary.ts';
@@ -42,10 +44,14 @@ const USER: UserIdentity = {
 
 class FakeTokenSource implements TokenSource {
   calls = 0;
+  silentCalls = 0;
+  lastSession: SessionCredential | undefined;
   private readonly outcome: AuthOutcome | Error;
+  private readonly renewal: AuthOutcome | Error;
 
-  constructor(outcome: AuthOutcome | Error) {
+  constructor(outcome: AuthOutcome | Error, renewal: AuthOutcome | Error = outcome) {
     this.outcome = outcome;
+    this.renewal = renewal;
   }
 
   async acquireToken(): Promise<AuthOutcome> {
@@ -53,19 +59,32 @@ class FakeTokenSource implements TokenSource {
     if (this.outcome instanceof Error) throw this.outcome;
     return this.outcome;
   }
+
+  async acquireTokenSilently(session: SessionCredential): Promise<AuthOutcome> {
+    this.silentCalls += 1;
+    this.lastSession = session;
+    if (this.renewal instanceof Error) throw this.renewal;
+    return this.renewal;
+  }
 }
 
 class FakeDns implements DnsConfigurator {
   readonly configured: Array<{ iface: string; servers: string[]; domains: string[] }> = [];
   readonly reverted: string[] = [];
   failOnConfigure: Error | undefined;
+  /** Fails only this interface, once the gate opens. */
+  failOnInterface: string | undefined;
+  /** When set, configure() waits for this, like a slow sudo. */
+  gate: Promise<void> | undefined;
 
   async configure(
     iface: string,
     servers: readonly string[],
     domains: readonly string[],
   ): Promise<void> {
+    if (this.gate) await this.gate;
     if (this.failOnConfigure) throw this.failOnConfigure;
+    if (iface === this.failOnInterface) throw new NetworkError(`${iface} has gone`);
     this.configured.push({ iface, servers: [...servers], domains: [...domains] });
   }
 
@@ -93,6 +112,7 @@ function successOutcome(): AuthOutcome {
     account: 'user@contoso.example',
     tenantId: '11111111-2222-3333-4444-555555555555',
     fromCache: true,
+    homeAccountId: 'home-1',
   };
 }
 
@@ -138,6 +158,8 @@ interface BuildOptions {
   readonly credentialLimits?: { readonly userPassLen: number };
   /** Overrides the token the fake authenticator returns. */
   readonly accessToken?: string;
+  readonly verifyName?: string;
+  readonly inlineCa?: string;
 }
 
 function build(options: BuildOptions = {}): {
@@ -171,6 +193,8 @@ function build(options: BuildOptions = {}): {
     ...(options.azureCompat ? { azureCompat: true } : {}),
     ...(options.useCredentialsFile ? { useCredentialsFile: true } : {}),
     ...(options.skipDns ? { skipDns: true } : {}),
+    ...(options.verifyName ? { verifyName: options.verifyName } : {}),
+    ...(options.inlineCa ? { inlineCa: options.inlineCa } : {}),
     events: { onWarning: (message) => warnings.push(message) },
   });
 
@@ -191,6 +215,167 @@ function assertNoSecretsLeftBehind(): void {
   assert.ok(!existsSync(paths.configFile), 'generated config must be removed');
   assert.ok(!existsSync(paths.managementSocket), 'management socket must be removed');
 }
+
+describe('lifecycle: group tokens', () => {
+  const withGroupToken = (): AzureVpnProfile => ({
+    ...profile,
+    auth: { ...profile.auth, enableGroupToken: true },
+  });
+
+  it('are not sent to a gateway whose certificate name is unchecked', async () => {
+    const { connection, spawner } = build({ profile: withGroupToken() });
+    await assert.rejects(connection.connect(), /no certificate name to check/);
+    assert.equal(spawner.spawnCount, 0, 'OpenVPN must not start');
+  });
+
+  it('are allowed once the name is checked', async () => {
+    const { connection, spawner } = build({
+      profile: withGroupToken(),
+      verifyName: '*.vpn.azure.com',
+    });
+    await connection.connect();
+    assert.equal(spawner.spawnCount, 1);
+    await connection.disconnect();
+  });
+
+  it('say so when the connection has to use the VPN token alone', async () => {
+    const { connection, warnings } = build({
+      profile: withGroupToken(),
+      verifyName: '*.vpn.azure.com',
+      auth: new FakeTokenSource({ ...successOutcome(), groupTokenFailure: 'consent required' }),
+    });
+    await connection.connect();
+    assert.ok(
+      warnings.some(
+        (warning) => /VPN token alone/.test(warning) && /consent required/.test(warning),
+      ),
+      `expected a group-token warning, got ${JSON.stringify(warnings)}`,
+    );
+    await connection.disconnect();
+  });
+});
+
+describe('lifecycle: certificate authority', () => {
+  it('hands roots that ship with OpenP2S to OpenVPN in the config', async () => {
+    const { connection } = build({ inlineCa: 'INLINE-ROOTS' });
+    await connection.connect();
+    const config = readFileSync(paths.configFile, 'utf8');
+    assert.ok(config.includes('<ca>\nINLINE-ROOTS\n</ca>'));
+    assert.ok(!/^ca /m.test(config), 'it must not also name a CA file');
+    await connection.disconnect();
+  });
+});
+
+describe('lifecycle: credential requests on a reconnect', () => {
+  /** Plays OpenVPN's side of the management socket. */
+  async function openVpnSide(): Promise<{
+    received: string[];
+    ask: () => void;
+    until: (done: () => boolean) => Promise<void>;
+    close: () => void;
+  }> {
+    const socket = createConnection(paths.managementSocket);
+    await once(socket, 'connect');
+    const received: string[] = [];
+    let partial = '';
+    socket.on('data', (chunk) => {
+      const lines = (partial + chunk.toString()).split('\n');
+      partial = lines.pop() ?? '';
+      received.push(...lines);
+    });
+    return {
+      received,
+      ask: () => socket.write(">PASSWORD:Need 'Auth' username/password\n"),
+      until: async (done) => {
+        const deadline = Date.now() + 2_000;
+        while (!done()) {
+          assert.ok(Date.now() < deadline, `timed out; received ${JSON.stringify(received)}`);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      },
+      close: () => socket.destroy(),
+    };
+  }
+
+  const answers = (lines: readonly string[]): number =>
+    lines.filter((line) => line === 'END').length;
+
+  it('renews the token silently, and never starts a sign-in', async () => {
+    const auth = new FakeTokenSource(successOutcome());
+    const { connection } = build({ auth });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    assert.equal(auth.silentCalls, 0, 'the first request uses the token from connect');
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 2);
+    assert.equal(auth.silentCalls, 1);
+    assert.equal(auth.calls, 1, 'only connect may start a sign-in');
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+
+  it('renews for the account and credential the session started with', async () => {
+    const auth = new FakeTokenSource({ ...successOutcome(), groupToken: true });
+    const { connection } = build({ auth });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 2);
+
+    assert.equal(auth.lastSession?.homeAccountId, 'home-1');
+    assert.equal(auth.lastSession?.groupToken, true);
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+
+  it('stops OpenVPN and says why when the session cannot be renewed', async () => {
+    const auth = new FakeTokenSource(successOutcome(), new AuthError('sign-in required'));
+    const { connection, warnings } = build({ auth });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    openVpn.ask();
+    await openVpn.until(() => openVpn.received.includes('signal SIGTERM'));
+
+    assert.equal(answers(openVpn.received), 1, 'the old token must not be sent again');
+    assert.ok(warnings.some((warning) => /run connect again/.test(warning)));
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+
+  it('holds a renewed token to the same size limit as the first', async () => {
+    const auth = new FakeTokenSource(successOutcome(), {
+      ...successOutcome(),
+      accessToken: 'x'.repeat(5_000),
+    });
+    const { connection, warnings } = build({ auth, credentialLimits: { userPassLen: 4096 } });
+    await connection.connect();
+    const openVpn = await openVpnSide();
+
+    openVpn.ask();
+    await openVpn.until(() => answers(openVpn.received) === 1);
+    openVpn.ask();
+    await openVpn.until(() => openVpn.received.includes('signal SIGTERM'));
+
+    assert.equal(answers(openVpn.received), 1, 'an oversized token must not be sent');
+    assert.ok(warnings.some((warning) => /5000 bytes/.test(warning)));
+
+    openVpn.close();
+    await connection.disconnect();
+  });
+});
 
 describe('lifecycle: successful connection', () => {
   it('brings the tunnel up and records the session', async () => {
@@ -709,6 +894,222 @@ describe('lifecycle: session record', () => {
     await connection.connect();
 
     assert.equal(statSync(paths.sessionFile).mode & 0o777, 0o600);
+    await connection.disconnect();
+  });
+});
+
+describe('a tunnel that drops and comes back', () => {
+  const RECONNECT_LOG = [
+    'SIGUSR1[soft,connection-reset] received, process restarting',
+    'TUN/TAP device tun1 opened',
+    'net_addr_v4_add: 172.16.0.9/24 dev tun1',
+    'Initialization Sequence Completed',
+  ];
+
+  const SECOND_RECONNECT_LOG = [
+    'SIGUSR1[soft,connection-reset] received, process restarting',
+    'TUN/TAP device tun2 opened',
+    'net_addr_v4_add: 172.16.0.10/24 dev tun2',
+    'Initialization Sequence Completed',
+  ];
+
+  /** The reconnect work is event-driven, so wait for what it leaves behind. */
+  async function until(predicate: () => boolean): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, 'timed out waiting for the reconnect to be handled');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  it('reapplies DNS to the new interface and updates the session record', async () => {
+    const { connection, dns, spawner, warnings } = build();
+    await connection.connect();
+    assert.deepEqual(
+      dns.configured.map((entry) => entry.iface),
+      ['tun0'],
+    );
+
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => dns.configured.length === 2);
+    assert.equal(dns.configured[1]?.iface, 'tun1');
+    assert.ok(warnings.some((warning) => /tunnel dropped/.test(warning)));
+
+    const store = new SessionStore(paths.sessionFile);
+    let record = await store.read();
+    await until(() => {
+      void store.read().then((current) => {
+        record = current;
+      });
+      return record?.interfaceName === 'tun1';
+    });
+    assert.equal(record?.assignedAddress, '172.16.0.9');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun1']);
+  });
+
+  it('warns loudly when DNS cannot be restored, and keeps the tunnel', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    assert.equal(spawner.process.signals.length, 0);
+    await connection.disconnect();
+  });
+
+  it('records the new interface even when DNS cannot be restored', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    const record = await new SessionStore(paths.sessionFile).read();
+    assert.equal(record?.interfaceName, 'tun1', 'status and disconnect rely on this');
+    assert.equal(record?.assignedAddress, '172.16.0.9');
+    assert.deepEqual(record?.dnsServers, [], 'the record must not claim DNS it does not have');
+    assert.match(record?.dnsFailure ?? '', /resolved said no/, 'doctor reports this');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, [], 'nothing was applied to the new link');
+  });
+
+  it('records DNS again once a later reconnect restores it', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+    const store = new SessionStore(paths.sessionFile);
+
+    dns.failOnConfigure = new NetworkError('resolved said no');
+    spawner.process.emitLog(RECONNECT_LOG);
+    await until(() => warnings.some((warning) => /could not be restored/.test(warning)));
+
+    dns.failOnConfigure = undefined;
+    spawner.process.emitLog(SECOND_RECONNECT_LOG);
+    await until(() => dns.configured.at(-1)?.iface === 'tun2');
+    let servers: readonly string[] = [];
+    await until(() => {
+      void store.read().then((record) => {
+        servers = record?.dnsServers ?? [];
+      });
+      return servers.length > 0;
+    });
+    assert.equal((await store.read())?.dnsFailure, undefined, 'the failure is over');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun2']);
+  });
+
+  it('handles quick reconnects in order, so the newest decides the record', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    let open = (): void => undefined;
+    dns.gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    spawner.process.emitLog(SECOND_RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    dns.gate = undefined;
+    open();
+
+    await until(() => dns.configured.at(-1)?.iface === 'tun2');
+    assert.deepEqual(
+      dns.configured.map((entry) => entry.iface),
+      ['tun0', 'tun1', 'tun2'],
+    );
+
+    await until(() => warnings.length >= 2);
+    const record = await new SessionStore(paths.sessionFile).read();
+    assert.equal(record?.interfaceName, 'tun2');
+    assert.equal(record?.assignedAddress, '172.16.0.10');
+
+    await connection.disconnect();
+    assert.deepEqual(dns.reverted, ['tun2']);
+  });
+
+  it('does not report a DNS failure on a link a newer reconnect replaced', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner, warnings } = build({ dns });
+    await connection.connect();
+
+    let open = (): void => undefined;
+    dns.gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    dns.failOnInterface = 'tun1';
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    spawner.process.emitLog(SECOND_RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    dns.gate = undefined;
+    open();
+
+    await until(() => dns.configured.at(-1)?.iface === 'tun2');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(!warnings.some((warning) => /could not be restored/.test(warning)));
+
+    await connection.disconnect();
+  });
+
+  it('does not recreate a record that disconnect has removed', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner } = build({ dns });
+    await connection.connect();
+    const store = new SessionStore(paths.sessionFile);
+
+    await store.clear();
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(await store.read(), undefined);
+    assert.equal(dns.configured.length, 1, 'nor should it reconfigure DNS');
+
+    await connection.disconnect();
+  });
+
+  it('leaves a session being disconnected alone', async () => {
+    const dns = new FakeDns();
+    const { connection, spawner } = build({ dns });
+    await connection.connect();
+    const store = new SessionStore(paths.sessionFile);
+
+    const record = await store.read();
+    assert.ok(record);
+    const stamp = new Date().toISOString();
+    await store.write({ ...record, disconnectRequestedAt: stamp });
+
+    spawner.process.emitLog(RECONNECT_LOG);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const after = await store.read();
+    assert.equal(after?.disconnectRequestedAt, stamp, 'the stamp must survive');
+    assert.equal(after?.interfaceName, 'tun0');
+    assert.equal(dns.configured.length, 1);
+
+    await connection.disconnect();
+  });
+
+  it('stays quiet about restarts before the first connection', async () => {
+    const spawner = new FakeSpawner({
+      script: [
+        'SIGUSR1[soft,connection-reset] received, process restarting',
+        ...SUCCESSFUL_CONNECT_LOG,
+      ],
+    });
+    const { connection, warnings } = build({ spawner });
+    await connection.connect();
+    assert.equal(warnings.filter((warning) => /tunnel dropped/.test(warning)).length, 0);
     await connection.disconnect();
   });
 });

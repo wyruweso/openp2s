@@ -11,11 +11,11 @@
  *     <name>                                   display name
  *     <serverlist><ServerEntry><fqdn>          gateway (may repeat)
  *     <clientauth><type>aad</type>
- *                 <aad><tenant><audience><issuer>
+ *                 <aad><tenant><audience><issuer><applicationid>
  *     <servervalidation><serversecret>         tls-auth key
  *                       <Cert><hash>           certificate thumbprint
  *                       <usepinnedroot>
- *     <clientconfig><dnsservers><dnsserver>
+ *     <clientconfig><dnsservers><dnsserver>    or <DnsServerEntry><dnsserver>
  *                   <dnssuffixes><dnssuffix>
  *                   <includeroutes>
  *     <protocolconfig><sslprotocolConfig><transportprotocol>
@@ -33,6 +33,7 @@ import { ProfileError } from '../errors.ts';
 import { validateServerSecret } from './serversecret.ts';
 import { routeFromPrefix, type AzureVpnProfile, type AzureVpnRoute } from './types.ts';
 import {
+  validateApplicationId,
   validateAudience,
   validateCertificateThumbprint,
   validateDnsSuffix,
@@ -217,8 +218,16 @@ function parseDnsServers(clientConfig: XmlNode | undefined): string[] {
   const container = childNode(clientConfig, 'dnsservers');
   if (!container) return [];
 
+  // Some real profiles wrap each server in <DnsServerEntry>. Missing those means
+  // no VPN DNS and no error, so private names just quietly stop resolving.
+  const entries = toArray(child(container, 'dnsserver'));
+  for (const wrapper of toArray(child(container, 'DnsServerEntry'))) {
+    if (typeof wrapper !== 'object' || wrapper === null) continue;
+    entries.push(...toArray(child(wrapper as XmlNode, 'dnsserver')));
+  }
+
   const servers: string[] = [];
-  for (const entry of toArray(child(container, 'dnsserver'))) {
+  for (const entry of entries) {
     const value = text(entry);
     if (!value) continue;
     const address = validateIpAddress(value, 'dnsserver');
@@ -317,13 +326,27 @@ export class AzureProfileParser {
     const tenant = validateTenantUrl(tenantText);
     const audience = validateAudience(audienceText);
     const issuer = text(child(aad, 'issuer'));
+    // Exactly "true", as in the official client, which sends one token for any
+    // other value. Sending a Graph token on a looser reading would hand it to
+    // the gateway in cases where the client Azure documents would not.
+    const enableGroupToken = text(child(aad, 'enablegrouptoken')) === 'true';
 
+    // <audience> names the VPN resource, which gives the scope. <applicationid>
+    // names the application to sign in as, which Microsoft documents for gateways
+    // with a custom audience. The two differ there, and a custom audience may have
+    // no redirect address of its own to sign in with. <clientid> is OpenP2S's own
+    // override, so it wins. Nothing is filled in by default: Microsoft's application
+    // id is common, but it isn't right for every gateway.
     const explicitClientId = text(child(aad, 'clientid')) ?? text(child(root, 'clientid'));
-    const clientId = explicitClientId ?? audience.clientId;
+    const applicationIdText = text(child(aad, 'applicationid'));
+    const applicationId = applicationIdText ? validateApplicationId(applicationIdText) : undefined;
+    const clientId = explicitClientId ?? applicationId ?? audience.clientId;
     if (!clientId) {
       throw new ProfileError(
         `profile <audience> is a URI (${audience.value}) and does not imply a client id`,
-        { hint: 'Pass --client-id with the application id registered for this VPN gateway.' },
+        {
+          hint: 'Add <applicationid> to the profile, or pass --client-id with the application id registered for this VPN gateway.',
+        },
       );
     }
 
@@ -371,6 +394,7 @@ export class AzureProfileParser {
         audience: audience.value,
         scope: audience.scope,
         clientId,
+        ...(enableGroupToken ? { enableGroupToken } : {}),
         ...(issuer ? { issuer } : {}),
       },
       serverSecret,
