@@ -25,7 +25,10 @@ export interface EntraAuthConfig {
   readonly audience: string;
   /** OAuth scope to request: "<audience>/.default". */
   readonly scope: string;
-  /** Public client application id to authenticate as. */
+  /**
+   * Public client application id to authenticate as. With a custom audience this
+   * can differ from the audience, and the scope still comes from the audience.
+   */
   readonly clientId: string;
   /** Request the Graph token required for Azure VPN group-based IP pools. */
   readonly enableGroupToken?: boolean;

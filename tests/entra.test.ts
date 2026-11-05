@@ -446,6 +446,47 @@ describe('explainAuthFailure', () => {
     });
   }
 
+  it('tells a missing reply address from a mismatched one', () => {
+    const missing = explainAuthFailure(
+      new Error('AADSTS500113: No reply address is registered for the application.'),
+      'browser',
+    );
+    assert.match(missing ?? '', /<applicationid>/);
+    assert.match(missing ?? '', /--client-id/);
+    assert.ok(!(missing ?? '').includes('device-code'), 'another flow would not fix this');
+
+    const mismatch = explainAuthFailure(new Error('AADSTS50011: redirect mismatch'), 'browser');
+    assert.match(mismatch ?? '', /device-code/);
+    assert.ok(!(mismatch ?? '').includes('<applicationid>'));
+  });
+
+  it('still recognises a redirect failure with no code in it', () => {
+    assert.match(
+      explainAuthFailure(new Error('invalid redirect uri'), 'browser') ?? '',
+      /loopback redirect/,
+    );
+  });
+
+  it('finds a code inside a long MSAL message', () => {
+    const message =
+      'invalid_client: Error(s): 500113 - Timestamp: 2026-11-05 - Description: ' +
+      'AADSTS500113: No reply address is registered. Trace ID: 0000 Correlation ID: 0000';
+    assert.match(explainAuthFailure(new Error(message)) ?? '', /<applicationid>/);
+  });
+
+  it('does not mistake a longer code for a shorter one', () => {
+    for (const code of [
+      'AADSTS500590',
+      'AADSTS7000160',
+      'AADSTS650010',
+      'AADSTS500760',
+      'AADSTS500790',
+      'AADSTS530030',
+    ]) {
+      assert.equal(explainAuthFailure(new Error(`${code}: something else`)), undefined, code);
+    }
+  });
+
   it('offers nothing rather than guessing at an unrecognised failure', () => {
     // A wrong hint is worse than none: it sends someone to check a tenant URL
     // that was never the problem.
