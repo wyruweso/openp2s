@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { AzureProfileParser } from '../src/profile/parser.ts';
+import { resolveAuthIdentity } from '../src/cli/context.ts';
 import { ProfileError } from '../src/errors.ts';
 import { validateAudience, validateTenantUrl } from '../src/profile/validate.ts';
 
@@ -412,5 +413,81 @@ describe('group-token profile setting', () => {
       );
       assert.equal(profile.auth.enableGroupToken === true, value === 'true', value);
     }
+  });
+});
+
+describe('which application to sign in as', () => {
+  const AUDIENCE = '41b23e61-6c1e-4545-b367-cd054e0ed4b4';
+  const APPLICATION = 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8';
+  const OVERRIDE = '99999999-8888-7777-6666-555555555555';
+
+  /** The Azure-exported profile, with extra elements inside <aad>. */
+  const withAad = (extra: string): string =>
+    fixture('azure-schema').replace('</audience>', `</audience>${extra}`);
+
+  it('uses the audience when nothing else is given, as before', () => {
+    const { auth } = parser.parse(fixture('azure-schema'));
+    assert.equal(auth.clientId, AUDIENCE);
+    assert.equal(auth.scope, `${AUDIENCE}/.default`);
+  });
+
+  it('signs in as <applicationid>, keeping the scope on the audience', () => {
+    const { auth } = parser.parse(withAad(`<applicationid>${APPLICATION}</applicationid>`));
+    assert.equal(auth.clientId, APPLICATION);
+    assert.equal(auth.audience, AUDIENCE);
+    assert.equal(auth.scope, `${AUDIENCE}/.default`);
+  });
+
+  it('lets <clientid> override <applicationid>', () => {
+    const both = `<applicationid>${APPLICATION}</applicationid><clientid>${OVERRIDE}</clientid>`;
+    assert.equal(parser.parse(withAad(both)).auth.clientId, OVERRIDE);
+  });
+
+  it('keeps honouring <clientid> on its own', () => {
+    const { auth } = parser.parse(withAad(`<clientid>${OVERRIDE}</clientid>`));
+    assert.equal(auth.clientId, OVERRIDE);
+  });
+
+  it('normalises the GUID, because the cache key depends on it', () => {
+    const { auth } = parser.parse(
+      withAad(`<applicationid>${APPLICATION.toUpperCase()}</applicationid>`),
+    );
+    assert.equal(auth.clientId, APPLICATION);
+  });
+
+  it('rejects an <applicationid> that is not a GUID', () => {
+    assert.throws(
+      () => parser.parse(withAad('<applicationid>not-a-guid</applicationid>')),
+      (error: unknown) => {
+        assert.ok(error instanceof ProfileError);
+        assert.match(error.message, /applicationid/);
+        return true;
+      },
+    );
+  });
+
+  it('treats an empty or nil <applicationid> as absent', () => {
+    for (const empty of ['<applicationid></applicationid>', '<applicationid i:nil="true" />']) {
+      assert.equal(parser.parse(withAad(empty)).auth.clientId, AUDIENCE, empty);
+    }
+  });
+
+  it('supplies the client id a URI audience cannot', () => {
+    const uri = 'https://vpn.contoso.example';
+    const xml = fixture('azure-schema').replace(
+      `<audience>${AUDIENCE}</audience>`,
+      `<audience>${uri}</audience><applicationid>${APPLICATION}</applicationid>`,
+    );
+    const { auth } = parser.parse(xml);
+    assert.equal(auth.clientId, APPLICATION);
+    assert.equal(auth.scope, `${uri}/.default`);
+  });
+
+  it('gives every command the same identity, with --client-id on top', () => {
+    const profile = parser.parse(withAad(`<applicationid>${APPLICATION}</applicationid>`));
+    assert.equal(resolveAuthIdentity(profile).clientId, APPLICATION);
+    const overridden = resolveAuthIdentity(profile, { clientId: OVERRIDE });
+    assert.equal(overridden.clientId, OVERRIDE);
+    assert.equal(overridden.scope, `${AUDIENCE}/.default`);
   });
 });
