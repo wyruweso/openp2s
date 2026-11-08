@@ -280,6 +280,12 @@ describe('privileges', () => {
   });
 
   it('runs OpenVPN as the user with only CAP_NET_ADMIN', () => {
+    assert.match(PROSE, /OpenVPN does not keep root/);
+    assert.match(PROSE, /runs OpenVPN as you with only the CAP_NET_ADMIN capability/);
+    // A source-policy check on purpose: the elevator can build both plans, and
+    // what the page promises is that the tunnel is started with this one.
+    assert.match(root('src/cli/connection.ts'), /elevator\.planNetworkOnly\(binary\.path/);
+
     const elevator = new Elevator({ euid: 1000, uid: 1000, gid: 1001, path: '/usr/bin:/bin' });
     const plan = elevator.planNetworkOnly('/opt/openvpn', ['--config', '/run/x']);
 
