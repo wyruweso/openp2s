@@ -168,17 +168,28 @@ describe('redact: must not eat legitimate output', () => {
 
   it('keeps exit codes, version numbers and prose about bearer tokens', () => {
     // The rules that recognise a credential by its key or prefix require a
-    // value of credential length, because these are all things OpenP2S and
-    // the tools it runs print.
+    // value of credential length, because these are the shapes OpenP2S and
+    // the tools it runs print. The values are synthetic: what matters is the
+    // shape, not any real version or commit.
     for (const text of [
       'openvpn exited with code=1',
       'resolvectl exited with code 1',
-      'OpenVPN 2.7.8 (tag v2.7.8, commit dc1f569087135894ac2703aeabd7a960ee9452d4)',
-      'node v24.22.2, @azure/msal-node 7.1.2',
+      // A version starts the way an opaque Entra token does: digit, dot.
+      'OpenVPN 1.2.3 (tag v1.2.3)',
+      // A SHA-1 commit id, which is a digest and stays readable.
+      `commit ${'0123456789abcdef'.repeat(3).slice(0, 40)}`,
       'the gateway rejected the bearer token',
     ]) {
       assert.equal(redact(text), text);
     }
+  });
+
+  it('needs 40 characters after the version digit before calling it a token', () => {
+    // The boundary of the refresh-token rule, so a long file or package name
+    // that happens to follow a digit and a dot is not redacted by accident.
+    const justShort = `1.${'a'.repeat(39)}`;
+    assert.equal(redact(justShort), justShort);
+    assert.notEqual(redact(`1.${'a'.repeat(40)}`), `1.${'a'.repeat(40)}`);
   });
 
   it('keeps ordinary OpenVPN log lines intact', () => {
