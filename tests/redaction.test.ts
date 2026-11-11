@@ -10,7 +10,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { describeError, redact } from '../src/errors.ts';
-import { syntheticLongJwt, syntheticServerSecret } from './helpers/syntheticToken.ts';
+import {
+  syntheticLongJwt,
+  syntheticOpaqueCredential,
+  syntheticServerSecret,
+} from './helpers/syntheticToken.ts';
 
 const TOKEN = syntheticLongJwt(2000);
 
@@ -49,6 +53,50 @@ describe('redact: secrets', () => {
   it('removes management password commands', () => {
     const out = redact('MANAGEMENT: CMD \'password "Auth" "hunter2"\'');
     assert.ok(!out.includes('hunter2'));
+  });
+
+  // Each segment of these is shorter than the opaque-run threshold, so none
+  // of them is caught by length alone. That is the case these rules exist for.
+  describe('opaque credentials too short or too dotted for the shape rules', () => {
+    const segmentsOf = (credential: string): string[] => credential.split('.').slice(1);
+
+    it('removes a refresh token whatever its version digit, and every segment', () => {
+      for (const version of [0, 1, 2]) {
+        const credential = syntheticOpaqueCredential(version);
+        const out = redact(`refresh failed for ${credential} at the token endpoint`);
+        for (const segment of segmentsOf(credential)) {
+          assert.ok(!out.includes(segment), `version ${version} left a segment behind`);
+        }
+        assert.match(out, /at the token endpoint$/);
+      }
+    });
+
+    it('removes an authorization code in a query string or a form body', () => {
+      const code = syntheticOpaqueCredential(1, [50, 40]).slice(2);
+      for (const text of [`GET /?code=${code}&state=s1 HTTP/1.1`, `code=${code}&client_info=c1`]) {
+        const out = redact(text);
+        for (const segment of code.split('.')) assert.ok(!out.includes(segment), text);
+      }
+    });
+
+    it('removes a bearer credential', () => {
+      const credential = syntheticOpaqueCredential(1, [70, 70]).slice(2);
+      const out = redact(`Authorization: Bearer ${credential}`);
+      for (const segment of credential.split('.')) assert.ok(!out.includes(segment));
+      assert.match(out, /^Authorization: Bearer /);
+    });
+
+    it('removes the token fields of a serialised MSAL cache', () => {
+      const credential = syntheticOpaqueCredential(1, [60, 60]);
+      const out = redact(`{"credential_type": "RefreshToken", "secret": "${credential}"}`);
+      for (const segment of segmentsOf(credential)) assert.ok(!out.includes(segment));
+      assert.match(out, /"credential_type": "RefreshToken"/);
+    });
+
+    it('removes a device code, which is enough on its own to finish a sign-in', () => {
+      assert.ok(!redact('{"device_code": "short-device-code"}').includes('short-device-code'));
+      assert.ok(!redact('device_code=short-device-code&x=1').includes('short-device-code'));
+    });
   });
 });
 
@@ -113,6 +161,21 @@ describe('redact: must not eat legitimate output', () => {
       'remote azuregateway-fake-0000.vpn.azure.com 443',
       'config = /run/user/1000/openp2s/openvpn.conf',
       'TCP connection established with [AF_INET]203.0.113.10:443',
+    ]) {
+      assert.equal(redact(text), text);
+    }
+  });
+
+  it('keeps exit codes, version numbers and prose about bearer tokens', () => {
+    // The rules that recognise a credential by its key or prefix require a
+    // value of credential length, because these are all things OpenP2S and
+    // the tools it runs print.
+    for (const text of [
+      'openvpn exited with code=1',
+      'resolvectl exited with code 1',
+      'OpenVPN 2.7.8 (tag v2.7.8, commit dc1f569087135894ac2703aeabd7a960ee9452d4)',
+      'node v24.22.2, @azure/msal-node 7.1.2',
+      'the gateway rejected the bearer token',
     ]) {
       assert.equal(redact(text), text);
     }

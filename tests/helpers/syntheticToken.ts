@@ -38,6 +38,24 @@ export function syntheticLongJwt(payloadBytes = 2200): string {
 }
 
 /**
+ * A synthetic opaque Entra-style credential: a version digit, a dot, then
+ * dot-separated base64url segments, as refresh tokens and authorization codes
+ * are written.
+ *
+ * Every segment is kept under the redactor's opaque-run threshold, so a test
+ * using this exercises the rules that recognise the credential itself rather
+ * than passing because some long run happened to be caught.
+ */
+export function syntheticOpaqueCredential(version = 1, segmentLengths = [60, 70, 50]): string {
+  const segments = segmentLengths.map((length, index) =>
+    Buffer.from(`synthetic-openp2s-opaque-${index}-`.padEnd(length, 'x'), 'utf8')
+      .toString('base64url')
+      .slice(0, length),
+  );
+  return `${version}.${segments.join('.')}`;
+}
+
+/**
  * A synthetic 512-hex serversecret.
  *
  * A repeating nibble sequence: structurally valid, obviously not entropy.
