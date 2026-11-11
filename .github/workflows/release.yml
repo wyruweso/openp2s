@@ -50,7 +50,10 @@ jobs:
             build-essential libssl-dev libcap-ng-dev \
             ca-certificates dpkg-dev fakeroot lintian man-db
 
-      - run: npm ci
+      # No dependency lifecycle scripts, in a job that holds id-token and
+      # attestations: write. None is needed: esbuild finds its binary through
+      # its platform package, and snyk is not used here at all.
+      - run: npm ci --ignore-scripts
 
       - name: Record what is being built
         run: |

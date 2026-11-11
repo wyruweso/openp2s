@@ -33,7 +33,9 @@ jobs:
           node-version-file: '.node-version'
           cache: npm
 
-      - run: npm ci
+      # Installed the way the release job installs: no dependency lifecycle
+      # scripts. Nothing needs one, and CI is what proves that.
+      - run: npm ci --ignore-scripts
 
       - name: Prettier
         run: npm run format:check
@@ -100,7 +102,7 @@ jobs:
             build-essential libssl-dev libcap-ng-dev \
             ca-certificates dpkg-dev fakeroot lintian man-db
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - run: scripts/build-openvpn.sh
 
