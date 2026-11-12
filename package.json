@@ -45,7 +45,7 @@
     "fast-check": "^4.10.2",
     "postject": "1.0.0-alpha.6",
     "prettier": "^3.9.10",
-    "snyk": "1.1308.3",
+    "snyk": "1.1308.4",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8.72.1"
   }
