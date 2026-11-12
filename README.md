@@ -56,6 +56,19 @@ sudo apt install ./openp2s_*_amd64.deb
 
 This installs `openp2s`, its OpenVPN build, and a man page.
 
+### Arch Linux (AUR)
+
+[`openp2s-bin`](https://aur.archlinux.org/packages/openp2s-bin) is available in
+the Arch User Repository (community-maintained):
+
+```bash
+paru -S openp2s-bin
+# or
+yay -S openp2s-bin
+```
+
+Or build it directly with `makepkg -si` from a clone of the AUR repository.
+
 ### Portable bundle
 
 For manual installation, or to run without installing a package:
