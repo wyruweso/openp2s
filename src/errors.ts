@@ -116,8 +116,18 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, Replacement]> = [
   // OpenVPN management commands, which carry credentials by design.
   [/(MANAGEMENT: CMD '(?:password|username)\s+"[^"]*"\s+)"[^']*"/g, `$1"${REDACTED}"`],
   [/((?:password|username)\s+"Auth"\s+)"[^"]*"/gi, `$1"${REDACTED}"`],
-  // Entra refresh tokens ("0.AXoA..."-style long opaque blobs).
-  [/\b0\.[A-Za-z0-9_-]{40,}/g, `${REDACTED}-refresh-token`],
+  // Credentials named by where they sit rather than by their shape, so a
+  // value too short or too dotted for the shape rules below still goes. Both
+  // need a value of credential length: `code=0` is an exit status, and
+  // "bearer token" is prose.
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/-]{20,}=*/gi, `$1${REDACTED}`],
+  [/\b(code=)[^&\s"'<>]{20,}/g, `$1${REDACTED}`],
+  // Entra's opaque refresh tokens and authorization codes: a version digit, a
+  // dot, then base64url ("0.AXoA...", "1.AXoA..."). They are opaque, so their
+  // format is not ours to rely on - the version can move on, and any dotted
+  // segment after the first is taken with it rather than left behind, which
+  // the opaque-run rule below would miss for segments under its length.
+  [/\b[0-9]\.[A-Za-z0-9_-]{40,}(?:\.[A-Za-z0-9_-]+)*/g, `${REDACTED}-refresh-token`],
   // The 512-hex-character serversecret, and any long hex run near its size.
   // A SHA-512 digest is exactly 128 hex characters and lands here, so this
   // rule has to exempt checksums just as the opaque-run rule below does.
@@ -133,11 +143,15 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, Replacement]> = [
     (match: string): string => keepDigest(match, `${REDACTED}-token-fragment`),
   ],
   // JSON/­query fields that name a secret, whatever the value looks like.
+  // `secret` is where MSAL's serialised cache keeps every token it holds.
   [
-    /("(?:access_token|refresh_token|id_token|client_secret|password|serversecret)"\s*:\s*")[^"]*"/gi,
+    /("(?:access_token|refresh_token|id_token|client_secret|password|serversecret|secret|device_code)"\s*:\s*")[^"]*"/gi,
     `$1${REDACTED}"`,
   ],
-  [/\b((?:access_token|refresh_token|id_token|client_secret|password)=)[^&\s]+/gi, `$1${REDACTED}`],
+  [
+    /\b((?:access_token|refresh_token|id_token|client_secret|password|device_code)=)[^&\s]+/gi,
+    `$1${REDACTED}`,
+  ],
 ];
 
 /**
