@@ -10,7 +10,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { describeError, redact } from '../src/errors.ts';
-import { syntheticLongJwt, syntheticServerSecret } from './helpers/syntheticToken.ts';
+import {
+  syntheticLongJwt,
+  syntheticOpaqueCredential,
+  syntheticServerSecret,
+} from './helpers/syntheticToken.ts';
 
 const TOKEN = syntheticLongJwt(2000);
 
@@ -49,6 +53,50 @@ describe('redact: secrets', () => {
   it('removes management password commands', () => {
     const out = redact('MANAGEMENT: CMD \'password "Auth" "hunter2"\'');
     assert.ok(!out.includes('hunter2'));
+  });
+
+  // Each segment of these is shorter than the opaque-run threshold, so none
+  // of them is caught by length alone. That is the case these rules exist for.
+  describe('opaque credentials too short or too dotted for the shape rules', () => {
+    const segmentsOf = (credential: string): string[] => credential.split('.').slice(1);
+
+    it('removes a refresh token whatever its version digit, and every segment', () => {
+      for (const version of [0, 1, 2]) {
+        const credential = syntheticOpaqueCredential(version);
+        const out = redact(`refresh failed for ${credential} at the token endpoint`);
+        for (const segment of segmentsOf(credential)) {
+          assert.ok(!out.includes(segment), `version ${version} left a segment behind`);
+        }
+        assert.match(out, /at the token endpoint$/);
+      }
+    });
+
+    it('removes an authorization code in a query string or a form body', () => {
+      const code = syntheticOpaqueCredential(1, [50, 40]).slice(2);
+      for (const text of [`GET /?code=${code}&state=s1 HTTP/1.1`, `code=${code}&client_info=c1`]) {
+        const out = redact(text);
+        for (const segment of code.split('.')) assert.ok(!out.includes(segment), text);
+      }
+    });
+
+    it('removes a bearer credential', () => {
+      const credential = syntheticOpaqueCredential(1, [70, 70]).slice(2);
+      const out = redact(`Authorization: Bearer ${credential}`);
+      for (const segment of credential.split('.')) assert.ok(!out.includes(segment));
+      assert.match(out, /^Authorization: Bearer /);
+    });
+
+    it('removes the token fields of a serialised MSAL cache', () => {
+      const credential = syntheticOpaqueCredential(1, [60, 60]);
+      const out = redact(`{"credential_type": "RefreshToken", "secret": "${credential}"}`);
+      for (const segment of segmentsOf(credential)) assert.ok(!out.includes(segment));
+      assert.match(out, /"credential_type": "RefreshToken"/);
+    });
+
+    it('removes a device code, which is enough on its own to finish a sign-in', () => {
+      assert.ok(!redact('{"device_code": "short-device-code"}').includes('short-device-code'));
+      assert.ok(!redact('device_code=short-device-code&x=1').includes('short-device-code'));
+    });
   });
 });
 
@@ -116,6 +164,32 @@ describe('redact: must not eat legitimate output', () => {
     ]) {
       assert.equal(redact(text), text);
     }
+  });
+
+  it('keeps exit codes, version numbers and prose about bearer tokens', () => {
+    // The rules that recognise a credential by its key or prefix require a
+    // value of credential length, because these are the shapes OpenP2S and
+    // the tools it runs print. The values are synthetic: what matters is the
+    // shape, not any real version or commit.
+    for (const text of [
+      'openvpn exited with code=1',
+      'resolvectl exited with code 1',
+      // A version starts the way an opaque Entra token does: digit, dot.
+      'OpenVPN 1.2.3 (tag v1.2.3)',
+      // A SHA-1 commit id, which is a digest and stays readable.
+      `commit ${'0123456789abcdef'.repeat(3).slice(0, 40)}`,
+      'the gateway rejected the bearer token',
+    ]) {
+      assert.equal(redact(text), text);
+    }
+  });
+
+  it('needs 40 characters after the version digit before calling it a token', () => {
+    // The boundary of the refresh-token rule, so a long file or package name
+    // that happens to follow a digit and a dot is not redacted by accident.
+    const justShort = `1.${'a'.repeat(39)}`;
+    assert.equal(redact(justShort), justShort);
+    assert.notEqual(redact(`1.${'a'.repeat(40)}`), `1.${'a'.repeat(40)}`);
   });
 
   it('keeps ordinary OpenVPN log lines intact', () => {
