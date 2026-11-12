@@ -72,7 +72,11 @@ jobs:
       # tarball is fixed by the lockfile's integrity hash instead of by
       # whatever the registry serves for that version today. It is also not
       # snyk/actions/node, which wraps the floating `snyk/snyk:node` image.
-      - run: npm ci
+      #
+      # No lifecycle scripts, as in the other workflows. snyk's postinstall
+      # only fetches its CLI binary, and its wrapper fetches the same binary,
+      # checked against the published shasum, the first time it runs.
+      - run: npm ci --ignore-scripts
 
       # The severity policy lives in the npm script, so this gate can be run
       # locally exactly as CI runs it. Deliberately not part of `npm run
