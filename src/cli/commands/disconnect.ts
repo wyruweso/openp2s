@@ -95,21 +95,45 @@ export async function disconnectCommand(options: DisconnectOptions = {}): Promis
 }
 
 /**
- * Send a signal, elevating when we are not root.
+ * Send a signal to OpenVPN, without elevation where possible.
  *
- * `kill` is invoked with an argv array like every other command. The pid comes
- * from our own session record, but it is still passed as its own argument
- * rather than interpolated into a string.
+ * OpenVPN runs as this user (setpriv --reuid), so the kernel lets us signal it
+ * directly. Not asking sudo matters when nobody is at a terminal - a service's
+ * ExecStop, say - because sudo would want a password there and the stop would
+ * fail. EPERM means the tunnel predates that and OpenVPN is still root, so only
+ * then is `kill` elevated. It is invoked with an argv array like every other
+ * command; the pid comes from our own session record, but is still passed as
+ * its own argument rather than interpolated into a string.
  */
+export async function signalOpenvpn(
+  pid: number,
+  signal: 'SIGTERM' | 'SIGKILL',
+  deps: {
+    readonly kill: (pid: number, signal: NodeJS.Signals) => void;
+    readonly isRoot: boolean;
+    readonly elevated: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => Promise<void>;
+  },
+): Promise<void> {
+  try {
+    deps.kill(pid, signal);
+    return;
+  } catch (error) {
+    if (deps.isRoot || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+  }
+  await deps.elevated(pid, signal);
+}
+
 async function sendSignal(
   context: ReturnType<typeof createContext>,
   pid: number,
   signal: 'SIGTERM' | 'SIGKILL',
 ): Promise<void> {
-  if (context.elevator.isRoot) {
-    process.kill(pid, signal);
-    return;
-  }
-  const plan = context.elevator.plan('kill', [`-${signal.replace('SIG', '')}`, String(pid)]);
-  await context.runner.run(plan.command, plan.args, { timeoutMs: 10_000 });
+  await signalOpenvpn(pid, signal, {
+    kill: (target, sig) => process.kill(target, sig),
+    isRoot: context.elevator.isRoot,
+    elevated: async (target, sig) => {
+      const plan = context.elevator.plan('kill', [`-${sig.replace('SIG', '')}`, String(target)]);
+      await context.runner.run(plan.command, plan.args, { timeoutMs: 10_000 });
+    },
+  });
 }

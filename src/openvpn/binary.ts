@@ -66,7 +66,6 @@ export interface LocateOptions {
    * only the installed locations apply.
    */
   readonly repoRoot?: string | undefined;
-  readonly env?: NodeJS.ProcessEnv;
   /** Overrides process.execPath, so sibling discovery is testable. */
   readonly execPath?: string;
   /**
@@ -102,14 +101,12 @@ export const INSTALLED_BINARY_PATHS: readonly string[] = [
  * happens to exist on the machine running the tests.
  */
 export function openVpnCandidates(options: LocateOptions): string[] {
-  const env = options.env ?? process.env;
   const buildRoot = options.repoRoot ? join(options.repoRoot, 'build', 'openvpn') : undefined;
 
   const execDir = dirname(options.execPath ?? process.execPath);
 
   return [
     options.override,
-    env['OPENP2S_OPENVPN_BINARY'],
     // A source checkout, if we are running from one.
     buildRoot ? join(buildRoot, 'sbin', 'openvpn') : undefined,
     // Beside the executable: what makes the portable tarball work in place.
@@ -137,7 +134,7 @@ export function locateOpenVpnBinary(options: LocateOptions): OpenVpnBinary {
         'Looked in:\n' +
         candidates.map((candidate) => `  ${candidate}`).join('\n') +
         '\n\nBuild it with scripts/build-openvpn.sh, install the openp2s ' +
-        'package, or set OPENP2S_OPENVPN_BINARY.\n' +
+        'package, or pass --openvpn-binary.\n' +
         'OpenP2S will not fall back to the system openvpn: stock builds ' +
         'truncate the Entra access token and cannot authenticate to an Azure ' +
         'gateway.',

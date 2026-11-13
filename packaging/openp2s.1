@@ -126,11 +126,26 @@ otherwise be hidden by a silent retry.
 Cached sessions are scoped to the flow that created them.
 .SH PRIVILEGES
 .B openp2s
-runs as you, and asks for elevation only where root is genuinely required: the
-.BR openvpn (8)
-process lifecycle, and per-link DNS configuration. Those are invoked through
+runs as you, and asks for elevation in two places: starting
+.BR openvpn (8),
+and per-link DNS configuration. Both are invoked through
 .BR sudo (8)
 by absolute path.
+.PP
+OpenVPN does not keep root.
+.B sudo
+starts
+.BR setpriv (1),
+which runs OpenVPN as you with only the
+.B CAP_NET_ADMIN
+capability, no supplementary groups and no way to gain privileges, for the
+whole connection. That is enough to open the tun device and install routes,
+including after a reconnect, and it limits what a bad configuration or an
+OpenVPN bug can reach. It is still network administration, so a passwordless
+.B sudo
+rule for
+.B setpriv
+amounts to a rule for root.
 .PP
 Running it as
 .B sudo openp2s
