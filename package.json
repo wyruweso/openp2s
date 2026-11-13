@@ -33,7 +33,7 @@
     "check:cli-reproducible": "scripts/check-cli-reproducible.sh"
   },
   "dependencies": {
-    "@azure/msal-node": "^7.1.2",
+    "@azure/msal-node": "^7.2.1",
     "commander": "^15.0.0",
     "fast-xml-parser": "^5.11.1"
   },
