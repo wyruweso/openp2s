@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@azure/msal-node": "^7.1.2",
-    "commander": "^15.0.0",
+    "commander": "^15.1.0",
     "fast-xml-parser": "^5.11.1"
   },
   "devDependencies": {
