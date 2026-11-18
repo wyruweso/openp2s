@@ -14,6 +14,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { isIP } from 'node:net';
 import { redact, TunnelError } from '../errors.ts';
 
 /**
@@ -48,6 +49,8 @@ export interface TunnelDetails {
   assignedAddress: string | undefined;
   /** Routes the gateway pushed, as they appeared in PUSH_REPLY. */
   pushedRoutes: string[];
+  /** DNS servers the gateway pushed. See parsePushedDnsServers(). */
+  pushedDnsServers: string[];
   /** Furthest stage reached. */
   stage: ConnectionStage;
   /** Negotiated control-channel cipher, when the log reports it. */
@@ -160,6 +163,28 @@ const PATTERNS = {
   tunPermission: /Cannot open TUN\/TAP dev|Operation not permitted|ERROR: Cannot ioctl TUNSETIFF/,
 } as const;
 
+/**
+ * The DNS servers in a PUSH_REPLY's options, in the order they were pushed.
+ *
+ * Azure sends them as `dhcp-option DNS <address>`. The text is the gateway's
+ * and each address becomes an argument to a privileged `resolvectl`, so an
+ * entry is kept only when it is exactly that directive and the value is an IP
+ * address - anything else is dropped rather than repaired. Pushed `DOMAIN`
+ * options are not read: which names go to the VPN resolvers stays a decision
+ * of the profile and the user, never of the server.
+ */
+export function parsePushedDnsServers(pushOptions: string): string[] {
+  const servers: string[] = [];
+  for (const entry of pushOptions.split(',')) {
+    const match = /^dhcp-option\s+DNS6?\s+(\S+)$/.exec(entry.trim());
+    const address = match?.[1];
+    if (address && isIP(address) !== 0 && !servers.includes(address)) {
+      servers.push(address);
+    }
+  }
+  return servers;
+}
+
 export interface OpenVpnProcessOptions {
   readonly command: string;
   readonly args: readonly string[];
@@ -192,6 +217,7 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
     interfaceName: undefined,
     assignedAddress: undefined,
     pushedRoutes: [],
+    pushedDnsServers: [],
     stage: 'start',
     tlsCipher: undefined,
     failureReason: undefined,
@@ -448,6 +474,7 @@ export class OpenVpnProcess extends EventEmitter<OpenVpnEvents> {
         .split(',')
         .map((entry) => entry.trim())
         .filter((entry) => entry.startsWith('route '));
+      this.details.pushedDnsServers = parsePushedDnsServers(push[1]);
       return;
     }
 

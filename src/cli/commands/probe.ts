@@ -89,6 +89,8 @@ interface ProbeReport {
   readonly expectedCertificateName: string | null;
   /** The name the gateway presented, once its certificate was verified. */
   readonly certificateName: string | null;
+  /** DNS servers in the gateway's PUSH_REPLY; empty until one arrives. */
+  readonly pushedDnsServers: readonly string[];
   readonly failureReason: string | null;
   readonly error: string | null;
   /** What produced this result. No filesystem path, so it can be pasted. */
@@ -146,6 +148,7 @@ export async function probeCommand(
       tlsCipher: null,
       expectedCertificateName: null,
       certificateName: null,
+      pushedDnsServers: [],
       failureReason: null,
       error: describeError(caught),
       openvpn: binary ? provenanceOf(binary) : null,
@@ -315,6 +318,7 @@ async function runProbe(
       tlsCipher: connection.tlsCipher ?? null,
       expectedCertificateName: certificateName ?? null,
       certificateName: connection.certificateName ?? null,
+      pushedDnsServers: [...connection.pushedDnsServers],
       failureReason: failureReason === undefined ? null : redact(failureReason),
       error: error ?? null,
       openvpn: provenanceOf(binary),
@@ -345,8 +349,32 @@ async function runProbe(
           ? 'not accepted (no PUSH_REPLY)'
           : 'not attempted',
     ],
+    [
+      'Pushed DNS',
+      authenticated
+        ? connection.pushedDnsServers.length > 0
+          ? [...connection.pushedDnsServers]
+          : 'none'
+        : undefined,
+    ],
     ['Note', failureReason],
   ]);
+
+  // A profile's DNS servers are a copy, and the gateway's are current. When
+  // they disagree, `connect` still works - it uses both, the profile's first -
+  // but a stale first server costs a timeout on every new link, and it is the
+  // first thing to suspect when private names do not resolve.
+  const unpushed = profile.dnsServers.filter(
+    (server) => !connection.pushedDnsServers.includes(server),
+  );
+  if (authenticated && connection.pushedDnsServers.length > 0 && unpushed.length > 0) {
+    ui.line();
+    ui.warn(
+      `the profile names DNS servers the gateway did not push (${unpushed.join(' ')}). ` +
+        '`connect` uses both, the profile first. If those servers no longer answer, ' +
+        'download a fresh profile',
+    );
+  }
 
   ui.line();
   if (authenticated) {

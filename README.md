@@ -158,6 +158,13 @@ Azure P2S profiles may specify private DNS servers and search domains. OpenP2S
 applies them **only to the VPN interface and only for those domains**, so your
 ordinary browsing does not go through your employer's resolver.
 
+The gateway also pushes the virtual network's DNS servers when the tunnel comes
+up, as it does for the Azure VPN Client. OpenP2S adds them after the profile's
+own, so a profile whose servers have gone stale, or that names none, still gets
+working resolvers. Pushed servers never widen which names go to the VPN: that
+is still only the profile's suffixes and `--dns-domain`. `openp2s probe` shows
+what the gateway pushes.
+
 This matters for Azure Virtual Desktop and Private Link, where public DNS
 returns an endpoint that is then refused — a failure that looks like a broken
 service even though the VPN is connected.

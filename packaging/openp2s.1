@@ -35,8 +35,9 @@ No TLS ClientHello shaping or key-logging code is compiled in at all.
 .SH COMMANDS
 .TP
 .BI connect " profile.xml"
-Authenticate, bring up the tunnel and apply the profile's split DNS. Runs in
-the foreground; Ctrl+C disconnects cleanly.
+Authenticate, bring up the tunnel and apply split DNS: the profile's DNS
+servers, then any the gateway pushes. The gateway cannot change which names are
+sent to them. Runs in the foreground; Ctrl+C disconnects cleanly.
 .TP
 .BI convert " profile.xml"
 Write a standalone OpenVPN configuration. The output embeds the profile
