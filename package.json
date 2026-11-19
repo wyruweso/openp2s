@@ -44,9 +44,9 @@
     "eslint": "^10.14.0",
     "fast-check": "^4.10.2",
     "postject": "1.0.0-alpha.6",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "snyk": "1.1308.4",
     "typescript": "^5.9.0",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.72.2"
   }
 }
