@@ -40,7 +40,7 @@ import {
   type ProcessSpawner,
   type TunnelDetails,
 } from '../openvpn/process.ts';
-import { privateLinkWarning, type DnsConfigurator } from '../network/dns.ts';
+import { mergeDnsServers, privateLinkWarning, type DnsConfigurator } from '../network/dns.ts';
 import type { AzureVpnProfile } from '../profile/types.ts';
 import { ensurePrivateDir, type OpenP2SPaths } from '../platform/paths.ts';
 import type { Elevator } from '../platform/privilege.ts';
@@ -277,7 +277,7 @@ export class Connection {
     events?.onTunnelUp?.(details);
 
     // ---- 5. split DNS, only once the interface actually exists ----------
-    const dnsApplied = await this.applyDns(details);
+    const dnsServers = await this.applyDns(details);
 
     // ---- 6. session record ----------------------------------------------
     const record: SessionRecord = {
@@ -289,7 +289,7 @@ export class Connection {
       ownerPid: process.pid,
       interfaceName: details.interfaceName,
       assignedAddress: details.assignedAddress,
-      ...this.dnsFields(dnsApplied),
+      ...this.dnsFields(dnsServers),
       pushedRoutes: details.pushedRoutes,
       includeRoutes: profile.includeRoutes.map((route) => route.cidr),
       account: outcome.account,
@@ -321,14 +321,30 @@ export class Connection {
   }
 
   /**
-   * Point the tunnel's link at the profile's DNS. True when that was done.
+   * Point the tunnel's link at the VPN's DNS: the profile's servers, then the
+   * ones the gateway pushed. Returns the servers applied, or none.
    *
    * Called again after every reconnect: OpenVPN recreates the tun device then,
-   * and systemd-resolved forgets what it knew about the old one.
+   * and systemd-resolved forgets what it knew about the old one. The gateway
+   * sends a fresh PUSH_REPLY with it, so its servers are read again too.
    */
-  private async applyDns(details: TunnelDetails): Promise<boolean> {
+  private async applyDns(details: TunnelDetails): Promise<readonly string[]> {
     const { profile, events } = this.options;
-    if (this.options.skipDns || profile.dnsServers.length === 0) return false;
+    if (this.options.skipDns) return [];
+
+    const servers = mergeDnsServers(profile.dnsServers, details.pushedDnsServers);
+    if (servers.length === 0) {
+      // Accepted at startup because the gateway might have supplied servers.
+      // It did not, so the request cannot be honoured; the tunnel is still up.
+      if (this.options.dnsAllDomains || this.options.extraDnsDomains?.length) {
+        events?.onWarning?.(
+          'neither the profile nor the gateway supplied a DNS server, so --dns-domain and ' +
+            '--dns-all have nothing to route queries to; private names will resolve through ' +
+            'your normal resolver',
+        );
+      }
+      return [];
+    }
 
     if (!details.interfaceName) {
       // Should not happen: openvpn logs the device before completing
@@ -337,33 +353,30 @@ export class Connection {
         'the tunnel is up but OpenVPN did not report an interface name; ' +
           'skipping DNS configuration',
       );
-      return false;
+      return [];
     }
 
     const interfaceName = details.interfaceName;
     const domains = [...profile.dnsSuffixes, ...(this.options.extraDnsDomains ?? [])];
 
-    const warning = privateLinkWarning(
-      profile.dnsServers,
-      domains,
-      this.options.dnsAllDomains ?? false,
-    );
+    const warning = privateLinkWarning(servers, domains, this.options.dnsAllDomains ?? false);
     if (warning) events?.onWarning?.(warning);
 
-    await this.options.dns.configure(interfaceName, profile.dnsServers, domains, {
+    await this.options.dns.configure(interfaceName, servers, domains, {
       allDomains: this.options.dnsAllDomains ?? false,
     });
     this.established.dnsConfigured = true;
     this.established.interfaceName = interfaceName;
-    events?.onDnsConfigured?.(profile.dnsServers, profile.dnsSuffixes);
-    return true;
+    events?.onDnsConfigured?.(servers, profile.dnsSuffixes);
+    return servers;
   }
 
-  /** What the session record says about DNS, given whether it was applied. */
-  private dnsFields(applied: boolean): Pick<SessionRecord, 'dnsServers' | 'dnsDomains'> {
+  /** What the session record says about DNS, given the servers applied. */
+  private dnsFields(servers: readonly string[]): Pick<SessionRecord, 'dnsServers' | 'dnsDomains'> {
     const { profile, dnsAllDomains, extraDnsDomains } = this.options;
+    const applied = servers.length > 0;
     return {
-      dnsServers: applied ? profile.dnsServers : [],
+      dnsServers: [...servers],
       dnsDomains: applied
         ? dnsAllDomains
           ? ['.']
@@ -442,7 +455,7 @@ export class Connection {
     this.established.dnsConfigured = false;
     if (details.interfaceName) this.established.interfaceName = details.interfaceName;
 
-    let applied = false;
+    let applied: readonly string[] = [];
     let failure: unknown;
     try {
       applied = await this.applyDns(details);
@@ -587,6 +600,11 @@ export class Connection {
 
   get tlsCipher(): string | undefined {
     return this.tunnel?.details.tlsCipher;
+  }
+
+  /** DNS servers the gateway pushed, for probe reporting. */
+  get pushedDnsServers(): readonly string[] {
+    return this.tunnel?.details.pushedDnsServers ?? [];
   }
 
   /** Resolve when openvpn exits, so the CLI can hold the foreground. */

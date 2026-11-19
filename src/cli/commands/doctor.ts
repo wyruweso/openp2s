@@ -257,7 +257,9 @@ async function profileChecks(context: CommandContext, profile: AzureVpnProfile):
     checks.push({
       status: 'warn',
       label: 'profile specifies no DNS servers',
-      fix: 'Private names will resolve through your normal resolver.',
+      fix:
+        'Private names will resolve through your normal resolver, unless the gateway\n' +
+        '    pushes DNS servers (`openp2s probe` shows them) and --dns-domain routes names to them.',
     });
   } else if (profile.dnsSuffixes.length === 0) {
     // The Private Link trap.
@@ -376,18 +378,18 @@ export async function liveChecks(
       fix: `sudo resolvectl dns ${interfaceName} ${record.dnsServers.join(' ')}`,
     });
   } else if (missingServers.length > 0) {
-    // Something is attached, but not what the profile asked for. A green tick
-    // on "some DNS exists" would hide exactly this.
+    // Something is attached, but not what the connection asked for. A green
+    // tick on "some DNS exists" would hide exactly this.
     checks.push({
       status: 'fail',
-      label: 'the VPN interface has different DNS servers than the profile requires',
+      label: 'the VPN interface has different DNS servers than the connection configured',
       detail: `expected ${record.dnsServers.join(' ')}, found ${actualServers.join(' ')}`,
       fix: `sudo resolvectl dns ${interfaceName} ${record.dnsServers.join(' ')}`,
     });
   } else {
     checks.push({
       status: 'ok',
-      label: "the profile's DNS servers are attached to the VPN interface",
+      label: "the connection's DNS servers are attached to the VPN interface",
       detail: actualServers.join(' '),
     });
   }

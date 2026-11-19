@@ -207,34 +207,35 @@ async function runConnect(
   if (options.noDns && (options.dnsAll || options.dnsDomains?.length)) {
     throw new OpenP2SError('--no-dns cannot be combined with --dns-all or --dns-domain');
   }
-  if ((options.dnsAll || options.dnsDomains?.length) && profile.dnsServers.length === 0) {
-    throw new OpenP2SError(
-      'this profile specifies no DNS servers, so there is nothing to route queries to',
-      {
-        hint:
-          '--dns-all and --dns-domain choose *which* names go to the VPN resolvers;\n' +
-          'they cannot supply the resolvers themselves.',
-      },
-    );
-  }
-
-  const wantsDns = !options.noDns && profile.dnsServers.length > 0;
+  // --dns-domain and --dns-all are accepted for a profile with no DNS servers
+  // of its own: the gateway may push some. If it does not, the connection says
+  // so once the tunnel is up.
+  const dnsRequested = Boolean(options.dnsAll || options.dnsDomains?.length);
+  const wantsDns = !options.noDns && (profile.dnsServers.length > 0 || dnsRequested);
+  const resolvedActive = !options.noDns && (await isSystemdResolvedActive(context.runner));
 
   // Fail before authenticating rather than after the tunnel is up. DNS
   // configuration is fatal to a connect (the teardown stops OpenVPN), so
   // warning that "the tunnel will still come up" would be untrue - and for
   // an Azure Private Link profile a tunnel without its DNS is the exact
   // failure mode this client exists to avoid.
-  if (wantsDns && !(await isSystemdResolvedActive(context.runner))) {
+  if (wantsDns && !resolvedActive) {
     throw new OpenP2SError('systemd-resolved is not active, but this profile requires split DNS', {
       hint:
-        'The profile supplies DNS servers, and without systemd-resolved they\n' +
-        'cannot be applied. Private names would resolve through your public\n' +
-        'resolver, which is what breaks Azure Private Link.\n\n' +
+        'The profile supplies DNS servers, or --dns-domain or --dns-all asked for\n' +
+        'them, and without systemd-resolved they cannot be applied. Private names\n' +
+        'would resolve through your public resolver, which is what breaks Azure\n' +
+        'Private Link.\n\n' +
         'Start it:      sudo systemctl enable --now systemd-resolved\n' +
         'Or connect without DNS configuration:  openp2s connect <profile> --no-dns',
     });
   }
+
+  // Servers the gateway pushes need systemd-resolved as much as the profile's
+  // do. A profile with neither servers nor a DNS option has never required it,
+  // so without it such a connect goes ahead as before, ignoring what is pushed,
+  // rather than failing once the tunnel is already up.
+  const skipDns = options.noDns || !resolvedActive;
 
   if (!context.elevator.isRoot) {
     ui.debug(context.elevator.describe());
@@ -259,7 +260,7 @@ async function runConnect(
     verb: ui.isVerbose ? 4 : 3,
     verifyName: certificateName,
     ...(options.azureCompat ? { azureCompat: true } : {}),
-    ...(options.noDns ? { skipDns: true } : {}),
+    ...(skipDns ? { skipDns: true } : {}),
     ...(options.dnsAll ? { dnsAllDomains: true } : {}),
     ...(options.dnsDomains ? { extraDnsDomains: options.dnsDomains } : {}),
     credentialLimits: { userPassLen: binary.userPassLen },

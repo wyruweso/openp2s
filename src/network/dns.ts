@@ -83,6 +83,31 @@ export function toRoutingDomains(suffixes: readonly string[]): string[] {
 }
 
 /**
+ * The DNS servers to attach to the VPN link: the profile's, then the gateway's.
+ *
+ * The gateway pushes the virtual network's DNS servers in PUSH_REPLY, and the
+ * Azure VPN Client uses them. A profile's `<dnsservers>` is a copy taken when
+ * it was downloaded, or a hand edit, and can go stale: a profile still naming
+ * a resolver the gateway no longer routes gets a link whose every private
+ * query times out, while the client on Windows keeps working.
+ *
+ * The profile's servers stay first because they are an explicit choice, and
+ * systemd-resolved uses the first server until it fails. The gateway's follow
+ * as fallbacks. Neither list decides *which* names reach these servers: that
+ * is still only the routing domains, which the gateway cannot add to.
+ */
+export function mergeDnsServers(
+  fromProfile: readonly string[],
+  fromGateway: readonly string[],
+): string[] {
+  const servers: string[] = [];
+  for (const server of [...fromProfile, ...fromGateway]) {
+    if (!servers.includes(server)) servers.push(server);
+  }
+  return servers;
+}
+
+/**
  * Reject an interface name that is not a plausible kernel interface.
  *
  * The name comes from our own OpenVPN process, but it becomes an argument to
@@ -113,7 +138,7 @@ export function privateLinkWarning(
     return undefined;
   }
   return (
-    'the profile supplies DNS servers but no DNS suffixes, so nothing is routed ' +
+    'the VPN has DNS servers but the profile has no DNS suffixes, so nothing is routed ' +
     'to them. Private Link names may still resolve through your public DNS and ' +
     'return public addresses. Pass --dns-domain <suffix> to route specific names, ' +
     'or --dns-all to send every query over the VPN.'

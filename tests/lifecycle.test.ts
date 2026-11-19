@@ -23,7 +23,7 @@ import { AzureProfileParser } from '../src/profile/parser.ts';
 import type { AzureVpnProfile } from '../src/profile/types.ts';
 import type { OpenP2SPaths, UserIdentity } from '../src/platform/paths.ts';
 import { Elevator } from '../src/platform/privilege.ts';
-import { SessionStore } from '../src/platform/session.ts';
+import { SessionStore, type SessionRecord } from '../src/platform/session.ts';
 import { Connection } from '../src/cli/connection.ts';
 import {
   AUTH_FAILED_LOG,
@@ -160,6 +160,8 @@ interface BuildOptions {
   readonly accessToken?: string;
   readonly verifyName?: string;
   readonly inlineCa?: string;
+  /** Routing domains passed with --dns-domain. */
+  readonly extraDnsDomains?: readonly string[];
 }
 
 function build(options: BuildOptions = {}): {
@@ -195,6 +197,7 @@ function build(options: BuildOptions = {}): {
     ...(options.skipDns ? { skipDns: true } : {}),
     ...(options.verifyName ? { verifyName: options.verifyName } : {}),
     ...(options.inlineCa ? { inlineCa: options.inlineCa } : {}),
+    ...(options.extraDnsDomains ? { extraDnsDomains: options.extraDnsDomains } : {}),
     events: { onWarning: (message) => warnings.push(message) },
   });
 
@@ -1111,5 +1114,119 @@ describe('a tunnel that drops and comes back', () => {
     await connection.connect();
     assert.equal(warnings.filter((warning) => /tunnel dropped/.test(warning)).length, 0);
     await connection.disconnect();
+  });
+});
+
+describe('lifecycle: DNS servers pushed by the gateway', () => {
+  /** SUCCESSFUL_CONNECT_LOG, with the gateway pushing DNS servers as Azure does. */
+  function connectLogPushing(...servers: string[]): string[] {
+    const options = servers.map((server) => `dhcp-option DNS ${server}`).join(',');
+    return SUCCESSFUL_CONNECT_LOG.map((line) =>
+      line.includes('PUSH_REPLY,') ? line.replace("'PUSH_REPLY,", `'PUSH_REPLY,${options},`) : line,
+    );
+  }
+
+  function pushing(...servers: string[]): FakeSpawner {
+    return new FakeSpawner({ script: connectLogPushing(...servers) });
+  }
+
+  /**
+   * Connect, check, and always disconnect. A failed assertion must not leave
+   * the management socket listening: the file's test process would then never
+   * exit, and the run would hang instead of reporting the failure.
+   */
+  async function connected(
+    options: BuildOptions,
+    check: (built: ReturnType<typeof build>, record: SessionRecord) => Promise<void> | void,
+  ): Promise<void> {
+    const built = build(options);
+    try {
+      await check(built, await built.connection.connect());
+    } finally {
+      await built.connection.disconnect();
+    }
+  }
+
+  it("adds them after the profile's own servers", async () => {
+    await connected({ spawner: pushing('10.4.64.4', '10.10.0.5') }, ({ dns }, record) => {
+      assert.deepEqual(dns.configured, [
+        {
+          iface: 'tun0',
+          servers: ['10.10.0.4', '10.10.0.5', '10.4.64.4'],
+          domains: ['wvd.microsoft.com', 'corp.contoso.example'],
+        },
+      ]);
+      assert.deepEqual(record.dnsServers, ['10.10.0.4', '10.10.0.5', '10.4.64.4']);
+    });
+  });
+
+  it('uses them when the profile names no DNS servers', async () => {
+    // The stale-or-missing <dnsservers> case: the Azure VPN Client resolves
+    // private names with this profile, so OpenP2S should too.
+    await connected(
+      { profile: { ...profile, dnsServers: [] }, spawner: pushing('10.4.64.4') },
+      ({ dns }, record) => {
+        assert.deepEqual(dns.configured[0]?.servers, ['10.4.64.4']);
+        assert.deepEqual(record.dnsServers, ['10.4.64.4']);
+        assert.deepEqual(record.dnsDomains, ['wvd.microsoft.com', 'corp.contoso.example']);
+      },
+    );
+  });
+
+  it('configures nothing when neither the profile nor the gateway has a server', async () => {
+    await connected({ profile: { ...profile, dnsServers: [] } }, ({ dns, warnings }, record) => {
+      assert.deepEqual(dns.configured, []);
+      assert.deepEqual(record.dnsServers, []);
+      assert.deepEqual(record.dnsDomains, []);
+      assert.deepEqual(warnings, []);
+    });
+  });
+
+  it('says so when --dns-domain has no server to route to', async () => {
+    // connect accepts --dns-domain for such a profile, because the gateway
+    // might push servers. It did not, so the request cannot be honoured.
+    await connected(
+      { profile: { ...profile, dnsServers: [] }, extraDnsDomains: ['corp.example'] },
+      ({ dns, warnings }) => {
+        assert.deepEqual(dns.configured, []);
+        assert.ok(
+          warnings.some((warning) => /neither the profile nor the gateway/.test(warning)),
+          `expected a warning, got ${JSON.stringify(warnings)}`,
+        );
+      },
+    );
+  });
+
+  it('are ignored with DNS skipped', async () => {
+    await connected({ skipDns: true, spawner: pushing('10.4.64.4') }, ({ dns }, record) => {
+      assert.deepEqual(dns.configured, []);
+      assert.deepEqual(record.dnsServers, []);
+    });
+  });
+
+  it('are read again from the PUSH_REPLY of a reconnect', async () => {
+    await connected(
+      { profile: { ...profile, dnsServers: [] }, spawner: pushing('10.4.64.4') },
+      async ({ dns, spawner }) => {
+        spawner.process.emitLog([
+          'SIGUSR1[soft,connection-reset] received, process restarting',
+          "PUSH: Received control message: 'PUSH_REPLY,route 10.20.0.0 255.255.0.0,dhcp-option DNS 10.4.64.6,ifconfig 172.16.0.9 255.255.255.0'",
+          'TUN/TAP device tun1 opened',
+          'net_addr_v4_add: 172.16.0.9/24 dev tun1',
+          'Initialization Sequence Completed',
+        ]);
+
+        const deadline = Date.now() + 2_000;
+        while (dns.configured.length < 2) {
+          assert.ok(Date.now() < deadline, 'timed out waiting for the reconnect to be handled');
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.deepEqual(dns.configured[1], {
+          iface: 'tun1',
+          servers: ['10.4.64.6'],
+          domains: ['wvd.microsoft.com', 'corp.contoso.example'],
+        });
+      },
+    );
   });
 });

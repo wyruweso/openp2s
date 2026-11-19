@@ -8,8 +8,14 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { privateLinkWarning, toRoutingDomain, toRoutingDomains } from '../src/network/dns.ts';
+import {
+  mergeDnsServers,
+  privateLinkWarning,
+  toRoutingDomain,
+  toRoutingDomains,
+} from '../src/network/dns.ts';
 import { SystemdResolvedConfigurator } from '../src/network/systemdResolved.ts';
+import { parsePushedDnsServers } from '../src/openvpn/process.ts';
 import { RecordingCommandRunner } from '../src/platform/exec.ts';
 import { Elevator } from '../src/platform/privilege.ts';
 import { NetworkError } from '../src/errors.ts';
@@ -272,5 +278,81 @@ describe('Private Link diagnostics', () => {
 
   it('does not warn when the profile sets no DNS at all', () => {
     assert.equal(privateLinkWarning([], [], false), undefined);
+  });
+});
+
+describe('DNS servers pushed by the gateway', () => {
+  // The options part of a PUSH_REPLY, as an Azure gateway sends it.
+  const AZURE_PUSH =
+    'route 10.1.0.0 255.255.0.0,route 10.4.0.0 255.255.0.0,route-gateway 10.3.0.1,' +
+    'topology subnet,ifconfig 10.3.0.73 255.255.0.0,' +
+    'dhcp-option DNS 10.4.64.4,dhcp-option DNS 10.4.64.5,cipher AES-256-GCM';
+
+  it('reads dhcp-option DNS in the order it was pushed', () => {
+    assert.deepEqual(parsePushedDnsServers(AZURE_PUSH), ['10.4.64.4', '10.4.64.5']);
+  });
+
+  it('reads IPv6 servers pushed as DNS6', () => {
+    assert.deepEqual(parsePushedDnsServers('dhcp-option DNS6 2001:db8::53'), ['2001:db8::53']);
+  });
+
+  it('finds none in a reply that pushes none', () => {
+    assert.deepEqual(parsePushedDnsServers('route 10.1.0.0 255.255.0.0,topology subnet'), []);
+  });
+
+  it('pushes a server only once', () => {
+    assert.deepEqual(parsePushedDnsServers('dhcp-option DNS 10.4.64.4,dhcp-option DNS 10.4.64.4'), [
+      '10.4.64.4',
+    ]);
+  });
+
+  it('drops anything that is not exactly an address', () => {
+    // Each of these would reach a privileged resolvectl's argv.
+    for (const entry of [
+      'dhcp-option DNS not-an-address',
+      'dhcp-option DNS 10.4.64.4 10.4.64.5',
+      'dhcp-option DNS 10.4.64.4;reboot',
+      'dhcp-option DNS -h',
+      'dhcp-option DNS 999.1.1.1',
+      'dhcp-option DNS',
+      'dhcp-option dns 10.4.64.4',
+      'x dhcp-option DNS 10.4.64.4',
+    ]) {
+      assert.deepEqual(parsePushedDnsServers(entry), [], entry);
+    }
+  });
+
+  it('never reads routing domains from the gateway', () => {
+    // Which names go to the VPN resolvers is the profile's and the user's call.
+    assert.deepEqual(
+      parsePushedDnsServers('dhcp-option DOMAIN corp.example,dhcp-option DOMAIN-SEARCH example'),
+      [],
+    );
+  });
+});
+
+describe('choosing the VPN link DNS servers', () => {
+  it("keeps the profile's servers first, then adds the gateway's", () => {
+    assert.deepEqual(mergeDnsServers(['10.0.64.4'], ['10.4.64.4', '10.4.64.5']), [
+      '10.0.64.4',
+      '10.4.64.4',
+      '10.4.64.5',
+    ]);
+  });
+
+  it('uses the gateway servers when the profile names none', () => {
+    assert.deepEqual(mergeDnsServers([], ['10.4.64.4']), ['10.4.64.4']);
+  });
+
+  it('is the profile alone when the gateway pushes nothing', () => {
+    assert.deepEqual(mergeDnsServers(['10.10.0.4'], []), ['10.10.0.4']);
+  });
+
+  it('lists a server named by both only once, in the profile position', () => {
+    assert.deepEqual(mergeDnsServers(['10.4.64.5', '10.10.0.4'], ['10.4.64.4', '10.4.64.5']), [
+      '10.4.64.5',
+      '10.10.0.4',
+      '10.4.64.4',
+    ]);
   });
 });
