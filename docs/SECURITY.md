@@ -69,8 +69,15 @@ carries that through refreshes.
 
 ## Privileges
 
-OpenP2S runs as you. Only operations that require root are elevated, through
-`sudo`: the OpenVPN process lifecycle, and per-link DNS configuration.
+OpenP2S runs as you. Two operations are elevated through `sudo`.
+
+OpenVPN does not keep root. `sudo` starts `setpriv`, which runs OpenVPN as you
+with only `CAP_NET_ADMIN`, for its whole life. That is enough to open the tun
+device and install routes, including after a reconnect, and it limits what a bad
+config or an OpenVPN bug can reach. It is still network administration: do not
+add a passwordless `sudo` rule, because a rule for `setpriv` is a rule for root.
+
+Per-link DNS is set with `resolvectl` through `sudo`.
 
 `sudo openp2s ...` is refused. Running the whole client as root would mean a
 root process creating and inspecting files inside directories you control,

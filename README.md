@@ -108,6 +108,8 @@ Run `openp2s <command> --help` for options, or `man openp2s`.
 - Linux
 - systemd-resolved (`resolvectl`) for split DNS
 - `sudo`, for OpenVPN and DNS changes only
+- `setpriv` from util-linux, which runs OpenVPN as you with only `CAP_NET_ADMIN`.
+  Debian and Ubuntu always have it; on Fedora it is in `util-linux`, not `util-linux-core`
 - An Azure P2S gateway configured for Microsoft Entra ID authentication
 
 OpenP2S runs as your normal user. `sudo openp2s ...` is refused — it elevates

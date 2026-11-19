@@ -26,6 +26,9 @@ export interface ElevationPlan {
 
 export interface ElevatorOptions {
   readonly euid?: number;
+  /** The identity OpenVPN drops to. Injectable for tests. */
+  readonly uid?: number;
+  readonly gid?: number;
   /** Path or name of the escalation helper. */
   readonly sudoPath?: string;
   /**
@@ -39,6 +42,8 @@ export interface ElevatorOptions {
 
 export class Elevator {
   private readonly euid: number;
+  private readonly uid: number;
+  private readonly gid: number;
   private readonly sudoPath: string;
   private readonly searchPath: string;
   private readonly disabled: boolean;
@@ -46,6 +51,8 @@ export class Elevator {
   constructor(options: ElevatorOptions = {}) {
     this.disabled = options.disabled ?? false;
     this.euid = options.euid ?? (typeof process.geteuid === 'function' ? process.geteuid() : 0);
+    this.uid = options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
+    this.gid = options.gid ?? (typeof process.getgid === 'function' ? process.getgid() : 0);
     this.sudoPath = options.sudoPath ?? 'sudo';
     this.searchPath = options.path ?? process.env['PATH'] ?? '/usr/sbin:/usr/bin:/sbin:/bin';
   }
@@ -92,6 +99,42 @@ export class Elevator {
       // `--` stops sudo parsing anything after it as its own option, so a
       // hostname that happens to start with a dash cannot become a flag.
       args: ['--', resolved, ...args],
+      elevated: true,
+    };
+  }
+
+  /**
+   * Build the pair for a command that only needs to manage network interfaces.
+   *
+   * sudo starts setpriv, which becomes this user with CAP_NET_ADMIN and nothing
+   * else, then execs the command. OpenVPN needs that one capability to open the
+   * tun device and install routes, including when it reconnects, so it never
+   * has to hold root. A bad config or a bug reached from the gateway then gets
+   * the user's own access plus network administration, not the machine.
+   */
+  planNetworkOnly(command: string, args: readonly string[]): ElevationPlan {
+    const resolved = this.resolveExecutable(command);
+
+    if (this.isRoot || this.disabled) {
+      return { command: resolved, args: [...args], elevated: false };
+    }
+
+    return {
+      command: this.sudoPath,
+      args: [
+        '--',
+        this.resolveExecutable('setpriv'),
+        `--reuid=${this.uid}`,
+        `--regid=${this.gid}`,
+        '--clear-groups',
+        '--inh-caps=-all,+net_admin',
+        '--ambient-caps=-all,+net_admin',
+        '--bounding-set=-all,+net_admin',
+        '--no-new-privs',
+        '--',
+        resolved,
+        ...args,
+      ],
       elevated: true,
     };
   }
